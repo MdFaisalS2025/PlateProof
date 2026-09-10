@@ -1,7 +1,9 @@
 """Shared test fixtures.
 
 Keeps configuration tests deterministic: they must not be influenced by the
-developer's shell environment or by a repository-local ``.env`` file.
+developer's shell environment or by a repository-local ``.env`` file. The fixture
+is opt-in (not autouse) so it does not change the working directory for tests
+that legitimately rely on repository-relative paths.
 """
 
 import os
@@ -13,8 +15,10 @@ import pytest
 from plateproof.core.config import get_settings
 
 
-@pytest.fixture(autouse=True)
-def _isolate_plateproof_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+@pytest.fixture
+def isolated_settings_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[None]:
     """Strip ``PLATEPROOF_*`` env vars, drop the cache, and run from a clean cwd."""
     for key in list(os.environ):
         if key.startswith("PLATEPROOF_"):

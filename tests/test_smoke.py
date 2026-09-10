@@ -4,7 +4,7 @@ def test_import_plateproof() -> None:
     assert plateproof.__version__ == "0.1.0"
 
 
-def test_settings_default_to_google_disabled() -> None:
+def test_settings_default_to_google_disabled(isolated_settings_environment: None) -> None:
     from plateproof.core.config import Settings, get_settings
 
     settings = Settings(_env_file=None)
