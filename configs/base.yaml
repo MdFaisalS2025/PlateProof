@@ -1,0 +1,28 @@
+project:
+  name: PlateProof
+  tagline: Evidence behind every plate
+
+coverage:
+  jurisdictions:
+    - nyc
+    - florida
+
+features:
+  google_integration_enabled: false
+  local_llm_enabled: false
+  multimodal_reader_enabled: false
+
+matching:
+  auto_accept_threshold: 0.92
+  review_threshold: 0.75
+
+modeling:
+  risk_bands:
+    low_upper_bound: 0.33
+    moderate_upper_bound: 0.66
+  insufficient_history_min_prior_inspections: 1
+  random_seed: 42
+
+privacy:
+  publish_blacklists: false
+  store_google_review_text: false

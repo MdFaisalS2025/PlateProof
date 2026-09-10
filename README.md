@@ -1,0 +1,43 @@
+# PlateProof
+
+PlateProof is an independent restaurant-intelligence project combining official health-inspection records, violation histories, Michelin recognition, and carefully governed Google business information.
+
+The first release covers New York City and Florida. It preserves each jurisdiction's native inspection system instead of inventing a universal health grade.
+
+## Start here
+
+1. Read `CLAUDE.md`.
+2. Read `docs/PlateProof_Implementation_Specification.md` completely.
+3. Paste `CLAUDE_CODE_START_PROMPT.md` into Claude Code.
+4. Ask Claude Code to plan first and wait for approval before implementation.
+
+## Non-negotiable constraints
+
+- The core MVP must work without paid APIs or a credit card.
+- NYC and Florida use separate targets and models.
+- Michelin recognition is context, not evidence of food safety.
+- Google Maps content must not enter model training or evaluation.
+- Predictions are estimates and must show uncertainty and source dates.
+
+## Local development
+
+Requires Python 3.12 (`requires-python = ">=3.12,<3.14"`).
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+```
+
+Quality checks:
+
+```powershell
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy plateproof
+```
+
+## Status
+
+Planning scaffold plus Task 1 project foundation. Ingestion, modeling, API, and
+interface code have not been implemented.
