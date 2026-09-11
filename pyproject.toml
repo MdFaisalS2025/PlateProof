@@ -8,8 +8,10 @@ version = "0.1.0"
 description = "Evidence-based restaurant inspection intelligence for NYC and Florida"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+  "polars>=1.12,<2",
   "pydantic>=2.7,<3",
   "pydantic-settings>=2.3,<3",
+  "tzdata>=2024.1",  # IANA tz database for zoneinfo on Windows (polars UTC datetimes)
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,11 @@
+{
+  "dataset_id": "43nn-pn8j",
+  "source_url": "https://data.cityofnewyork.us/resource/43nn-pn8j.csv",
+  "landing_page": "https://data.cityofnewyork.us/d/43nn-pn8j",
+  "retrieved_at_utc": "2026-09-09T14:30:00Z",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "socrata_rows_updated_at": "2026-09-08T05:00:00Z",
+  "soql_where": null,
+  "app_token_used": false,
+  "downloader_version": "0.1.0"
+}

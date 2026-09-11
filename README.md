@@ -34,10 +34,25 @@ Quality checks:
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
-python -m mypy plateproof
+python -m mypy plateproof scripts
 ```
+
+## Data downloads
+
+The NYC DOHMH inspection extract is fetched on demand into a timestamped
+snapshot directory (`raw.csv` + `metadata.json` + a `_SUCCESS` marker). Raw
+government data is never committed.
+
+```powershell
+python -m scripts.download_nyc --output data/raw/nyc
+```
+
+An optional free Socrata app token (`PLATEPROOF_SODA_APP_TOKEN`) raises rate
+limits; the download works without one. Use `--max-rows` to cap the download and
+`--where` to pass a SoQL filter.
 
 ## Status
 
-Planning scaffold plus Task 1 project foundation. Ingestion, modeling, API, and
-interface code have not been implemented.
+Planning scaffold plus Task 1 (project foundation) and Task 2 (NYC ingestion and
+event construction). Florida ingestion, modeling, API, and interface code have
+not been implemented.
