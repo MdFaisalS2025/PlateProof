@@ -45,6 +45,41 @@ def golden() -> dict[str, Any]:
 
 
 @pytest.fixture
+def fl_current_csv() -> Path:
+    return FIXTURES / "fl_sample_current.csv"
+
+
+@pytest.fixture
+def fl_overlap_csv() -> Path:
+    return FIXTURES / "fl_sample_overlap.csv"
+
+
+@pytest.fixture
+def fl_required_only_csv() -> Path:
+    return FIXTURES / "fl_sample_required_only.csv"
+
+
+@pytest.fixture
+def fl_utf8_bom_csv() -> Path:
+    return FIXTURES / "fl_sample_utf8_bom.csv"
+
+
+@pytest.fixture
+def fl_windows1252_csv() -> Path:
+    return FIXTURES / "fl_sample_windows1252.csv"
+
+
+@pytest.fixture
+def fl_decode_failure_csv() -> Path:
+    return FIXTURES / "fl_sample_decode_failure.csv"
+
+
+@pytest.fixture
+def fl_historical_xlsx() -> Path:
+    return FIXTURES / "fl_sample_historical.xlsx"
+
+
+@pytest.fixture
 def write_csv() -> Callable[[Path, list[str], list[list[str]]], Path]:
     def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> Path:
         with path.open("w", newline="", encoding="utf-8") as handle:

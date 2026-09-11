@@ -9,6 +9,8 @@ transformations live elsewhere and are out of scope for ingestion.
 
 from __future__ import annotations
 
+from typing import Any
+
 import polars as pl
 
 INSPECTION_KEY: tuple[str, str, str] = ("restaurant_id", "inspection_date", "inspection_type")
@@ -50,6 +52,12 @@ INSPECTION_EVENT_SCHEMA: dict[str, pl.DataType] = {
     "source_sha256": pl.String(),
     "ingested_at": pl.Datetime("us", "UTC"),
     "pipeline_version": pl.String(),
+    # Optional, jurisdiction-specific fields below. Null unless the source jurisdiction
+    # populates them; adding a jurisdiction must never repurpose an existing column.
+    "disposition": pl.String(),
+    "disposition_status": pl.String(),
+    "native_inspection_group_id": pl.String(),
+    "native_visit_sequence": pl.Int32(),
 }
 
 VIOLATION_EVENT_SCHEMA: dict[str, pl.DataType] = {
@@ -65,6 +73,10 @@ VIOLATION_EVENT_SCHEMA: dict[str, pl.DataType] = {
     "critical_flag_raw": pl.String(),
     "severity": pl.String(),
     "corrected_on_site": pl.Boolean(),
+    # How many times this violation category was cited on this inspection. NYC's
+    # extract is one row per physical citation, so it is always 1; Florida's extract
+    # is a count matrix, so it carries the source count directly.
+    "count": pl.Int32(),
     "source_dataset": pl.String(),
     "source_snapshot_date": pl.Date(),
     "source_retrieved_at_utc": pl.Datetime("us", "UTC"),
@@ -90,3 +102,35 @@ def assert_unique_inspection_key(events: pl.DataFrame) -> None:
             "inspection_events violates the one-row-per-"
             f"{INSPECTION_KEY} invariant for: {duplicates.rows()}"
         )
+
+
+def assert_unique_inspection_id(events: pl.DataFrame) -> None:
+    """Verify one row per ``inspection_id``.
+
+    This is the correct primary-key invariant for any jurisdiction, whether
+    ``inspection_id`` is synthesized from ``INSPECTION_KEY`` (NYC, where the two
+    checks are equivalent) or native to the source (Florida's Inspection Visit ID,
+    where two rows can legitimately share ``INSPECTION_KEY`` while still being
+    distinct, genuinely separate visits). Raises ValueError listing the offending
+    ids if any repeats.
+    """
+    duplicates = events.group_by("inspection_id").len().filter(pl.col("len") > 1).drop("len")
+    if duplicates.height:
+        raise ValueError(
+            "inspection_events violates the one-row-per-inspection_id invariant for: "
+            f"{duplicates.get_column('inspection_id').to_list()}"
+        )
+
+
+def finalize_event_frame(
+    records: list[dict[str, Any]], schema: dict[str, pl.DataType]
+) -> pl.DataFrame:
+    """Build a typed frame from ``records``, filling any schema key absent from
+    every record with null instead of requiring each jurisdiction's ingestion code
+    to enumerate keys it has nothing to contribute for."""
+    keys = list(schema)
+    present = {key for record in records for key in record}
+    missing = [key for key in keys if key not in present]
+    if missing and records:
+        records = [{**{key: None for key in missing}, **record} for record in records]
+    return pl.DataFrame(records, schema=schema)

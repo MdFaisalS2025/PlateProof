@@ -27,6 +27,7 @@ from plateproof.features.inspection_events import (
     INSPECTION_EVENT_SCHEMA,
     VIOLATION_EVENT_SCHEMA,
     assert_unique_inspection_key,
+    finalize_event_frame,
 )
 
 NYC_DATASET_ID = "43nn-pn8j"
@@ -409,6 +410,7 @@ def _emit_violations(
                 "critical_flag_raw": item["critical_flag_raw"],
                 "severity": _severity(item["critical_flag_raw"]),
                 "corrected_on_site": None,
+                "count": 1,  # NYC's extract is one row per physical citation
                 **provenance,
             }
         )
@@ -566,10 +568,10 @@ def build_nyc_inspection_events(
             }
         )
 
-    events = pl.DataFrame(event_records, schema=INSPECTION_EVENT_SCHEMA).sort(
+    events = finalize_event_frame(event_records, INSPECTION_EVENT_SCHEMA).sort(
         ["restaurant_id", "inspection_date", "inspection_type"]
     )
-    event_violations = pl.DataFrame(violations, schema=VIOLATION_EVENT_SCHEMA).sort(
+    event_violations = finalize_event_frame(violations, VIOLATION_EVENT_SCHEMA).sort(
         ["inspection_id", "violation_event_id"]
     )
     assert_unique_inspection_key(events)
