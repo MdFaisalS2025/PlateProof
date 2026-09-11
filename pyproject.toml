@@ -13,6 +13,7 @@ dependencies = [
   "pydantic-settings>=2.3,<3",
   "tzdata>=2024.1",  # IANA tz database for zoneinfo on Windows (polars UTC datetimes)
   "fastexcel>=0.12,<1",  # local, free XLSX reader used by polars.read_excel (Florida historical archives)
+  "rapidfuzz>=3.9,<4",  # local, free (MIT) fuzzy string matching for restaurant-name similarity
 ]
 
 [project.optional-dependencies]

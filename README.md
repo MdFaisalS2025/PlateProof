@@ -51,8 +51,25 @@ An optional free Socrata app token (`PLATEPROOF_SODA_APP_TOKEN`) raises rate
 limits; the download works without one. Use `--max-rows` to cap the download and
 `--where` to pass a SoQL filter.
 
+Florida DBPR extracts (current-fiscal-year CSV and recent statewide XLSX
+archives) download the same way via `python -m scripts.download_florida`; see
+`plateproof/ingestion/florida.py` for the supported fiscal years and formats.
+
+## Michelin recognition (optional)
+
+Michelin data is entirely optional -- the application runs correctly with none
+configured. PlateProof does not scrape Michelin Guide pages, use Michelin's
+paid API, or use third-party Michelin datasets scraped from the Guide site.
+The only supported source is a small, hand-maintained, provenance-rich CSV;
+see `data/reference/README.md` for the source policy and column contract, and
+`plateproof/ingestion/michelin.py` for the loader. The repository ships only a
+header-only template (`data/reference/michelin_seed_template.csv`) -- no real
+Michelin restaurant data is committed. A Michelin distinction is contextual
+metadata and never implies food safety or affects health-inspection results.
+
 ## Status
 
-Planning scaffold plus Task 1 (project foundation) and Task 2 (NYC ingestion and
-event construction). Florida ingestion, modeling, API, and interface code have
-not been implemented.
+Planning scaffold plus Task 1 (project foundation), Task 2 (NYC ingestion),
+Task 3 (Florida ingestion), and Task 4 (optional Michelin ingestion and
+auditable entity resolution). Modeling, the API, and the interface have not
+been implemented.
