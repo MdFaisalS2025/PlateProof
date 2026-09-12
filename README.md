@@ -67,9 +67,46 @@ header-only template (`data/reference/michelin_seed_template.csv`) -- no real
 Michelin restaurant data is committed. A Michelin distinction is contextual
 metadata and never implies food safety or affects health-inspection results.
 
+## Running the API and the Streamlit MVP
+
+Task 7 adds a read-only FastAPI service and a Streamlit interface, both thin
+adapters over a shared `plateproof.serving` service/repository layer backed
+by DuckDB over local Parquet tables. Neither ever downloads data, trains a
+model, or deserializes a model artifact inside a request/page load.
+
+Build the processed tables from already-downloaded extracts (never
+downloads anything itself):
+
+```powershell
+python -m scripts.build_processed_tables --nyc-events data\raw\nyc\raw.csv --florida-events data\raw\florida\*.csv --output data\processed
+```
+
+Score predictions offline (also never trains or downloads; requires an
+explicit `--as-of-date`, never "today" by default):
+
+```powershell
+python -m scripts.score_predictions --jurisdiction nyc --artifact-path models\nyc\nyc_next_initial_score_ge_14\v1 --events data\processed\inspection_events.parquet --violations data\processed\violation_events.parquet --as-of-date 2026-01-01 --output data\processed
+```
+
+Run the API and/or the Streamlit UI locally (each works independently):
+
+```powershell
+python -m scripts.run_app --target api
+python -m scripts.run_app --target streamlit
+```
+
+Configure local paths via `PLATEPROOF_`-prefixed environment variables (see
+`plateproof/core/config.py`): `PROCESSED_DATA_DIR`, `NYC_MODEL_ARTIFACT_PATH`,
+`FLORIDA_MODEL_ARTIFACT_PATH`, `PREDICTION_TABLE_PATH`,
+`EXPOSE_NON_READY_MODEL_CARDS` (default `false`). All optional -- the API
+and UI run correctly with none configured, showing clear "unavailable"
+states instead of failing.
+
 ## Status
 
-Planning scaffold plus Task 1 (project foundation), Task 2 (NYC ingestion),
-Task 3 (Florida ingestion), and Task 4 (optional Michelin ingestion and
-auditable entity resolution). Modeling, the API, and the interface have not
-been implemented.
+Task 1 (project foundation), Task 2 (NYC ingestion), Task 3 (Florida
+ingestion), Task 4 (optional Michelin ingestion and auditable entity
+resolution), Task 5 (leakage-safe temporal features), Task 6 (calibrated
+jurisdiction risk models), and Task 7 (FastAPI service and Streamlit MVP)
+are implemented. Task 8 (Copilot) and Task 9 (owner document extraction)
+are reserved but not implemented -- their routes return an explicit `501`.

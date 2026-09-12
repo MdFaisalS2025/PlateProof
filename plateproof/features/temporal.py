@@ -390,6 +390,110 @@ class _MeasureAccumulator:
         return True
 
 
+def _feature_values_from_state(
+    *,
+    jurisdiction: str,
+    history_depth: int,
+    prior_inspection_day_count: int,
+    days_since_previous_inspection_date: int | None,
+    nyc_snap: dict[str, Any],
+    nyc_crit_snap: dict[str, Any],
+    fl_high_snap: dict[str, Any],
+    fl_inter_snap: dict[str, Any],
+    fl_basic_snap: dict[str, Any],
+    fl_total_snap: dict[str, Any],
+    code_stats: dict[str, dict[str, Any]],
+    top_code: str | None,
+    any_violation_history: bool,
+    viol_total_citations: int,
+    viol_inspection_ids_seen: set[str],
+    fl_inspections_with_hp: int,
+    fl_follow_up_total: int,
+    fl_temp_closure_total: int,
+) -> dict[str, Any]:
+    """Pure function: accumulator-state snapshots -> one ``FEATURE_SCHEMA`` row
+    (jurisdiction nulling included).
+
+    This is the single place feature arithmetic is defined. Both the
+    retrospective per-inspection-event loop in ``build_temporal_features``
+    and the as-of ("current standing") snapshot in
+    ``build_asof_temporal_features`` call this with accumulator snapshots
+    taken *before* folding in the event/date the row is about -- so training
+    and inference features can never independently drift apart.
+    """
+    values: dict[str, Any] = {
+        "history_depth": history_depth,
+        "prior_inspection_day_count": prior_inspection_day_count,
+        "days_since_previous_inspection_date": days_since_previous_inspection_date,
+        "missing_history": history_depth == 0,
+        "prior_violation_total_citation_count": (
+            viol_total_citations if any_violation_history else None
+        ),
+        "prior_inspections_with_any_violation": (
+            len(viol_inspection_ids_seen) if any_violation_history else None
+        ),
+        "distinct_prior_violation_code_count": (len(code_stats) if any_violation_history else None),
+        "prior_top_violation_code_count": (code_stats[top_code]["citations"] if top_code else None),
+        "prior_top_violation_inspection_count": (
+            len(code_stats[top_code]["inspection_ids"]) if top_code else None
+        ),
+        "nyc_previous_day_score": nyc_snap["previous_day_value"],
+        "nyc_previous_day_score_complete": nyc_snap["previous_day_complete"],
+        "nyc_prior_valid_score_count": nyc_snap["valid_count"],
+        "nyc_score_prior_mean": nyc_snap["mean"],
+        "nyc_score_prior_max": nyc_snap["max"],
+        "nyc_score_prior_variance": nyc_snap["variance"],
+        "nyc_score_variance_available": nyc_snap["variance_available"],
+        "nyc_score_prior_time_trend": nyc_snap["trend"],
+        "nyc_score_trend_available": nyc_snap["trend_available"],
+        "nyc_previous_day_critical_violation_count": nyc_crit_snap["previous_day_value"],
+        "nyc_previous_day_critical_violation_count_complete": nyc_crit_snap[
+            "previous_day_complete"
+        ],
+        "nyc_prior_critical_violation_total": (
+            int(nyc_crit_snap["sum"]) if nyc_crit_snap["sum"] is not None else None
+        ),
+        "fl_previous_day_high_priority_count": fl_high_snap["previous_day_value"],
+        "fl_previous_day_high_priority_count_complete": fl_high_snap["previous_day_complete"],
+        "fl_previous_day_intermediate_count": fl_inter_snap["previous_day_value"],
+        "fl_previous_day_intermediate_count_complete": fl_inter_snap["previous_day_complete"],
+        "fl_previous_day_basic_count": fl_basic_snap["previous_day_value"],
+        "fl_previous_day_basic_count_complete": fl_basic_snap["previous_day_complete"],
+        "fl_previous_day_total_violation_count": fl_total_snap["previous_day_value"],
+        "fl_previous_day_total_violation_count_complete": fl_total_snap["previous_day_complete"],
+        "fl_total_violation_prior_mean": fl_total_snap["mean"],
+        "fl_total_violation_prior_max": fl_total_snap["max"],
+        "fl_total_violation_prior_variance": fl_total_snap["variance"],
+        "fl_total_violation_variance_available": fl_total_snap["variance_available"],
+        "fl_total_violation_prior_time_trend": fl_total_snap["trend"],
+        "fl_total_violation_trend_available": fl_total_snap["trend_available"],
+        "fl_high_priority_prior_mean": fl_high_snap["mean"],
+        "fl_high_priority_prior_max": fl_high_snap["max"],
+        "fl_prior_inspections_with_high_priority": (
+            fl_inspections_with_hp if jurisdiction == "florida" and history_depth else None
+        ),
+        "fl_prior_high_priority_total": (
+            int(fl_high_snap["sum"]) if fl_high_snap["sum"] is not None else None
+        ),
+        "fl_prior_valid_high_priority_count": fl_high_snap["valid_count"],
+        "fl_prior_valid_intermediate_count": fl_inter_snap["valid_count"],
+        "fl_prior_valid_basic_count": fl_basic_snap["valid_count"],
+        "fl_prior_valid_total_count": fl_total_snap["valid_count"],
+        "fl_prior_follow_up_required_count": (
+            fl_follow_up_total if jurisdiction == "florida" and history_depth else None
+        ),
+        "fl_prior_temporary_closure_count": (
+            fl_temp_closure_total if jurisdiction == "florida" and history_depth else None
+        ),
+    }
+    for key in list(values):
+        if jurisdiction != "nyc" and key.startswith("nyc_"):
+            values[key] = None
+        if jurisdiction != "florida" and key.startswith("fl_"):
+            values[key] = None
+    return values
+
+
 # --------------------------------------------------------------------------- #
 # Main entry point                                                            #
 # --------------------------------------------------------------------------- #
@@ -507,110 +611,28 @@ def build_temporal_features(
                     feature_records.append(
                         {
                             "inspection_id": inspection_id,
-                            "history_depth": history_depth,
-                            "prior_inspection_day_count": prior_day_count,
-                            "days_since_previous_inspection_date": days_since,
-                            "missing_history": history_depth == 0,
-                            "prior_violation_total_citation_count": (
-                                viol_total_citations if any_violation_history else None
-                            ),
-                            "prior_inspections_with_any_violation": (
-                                len(viol_inspection_ids_seen) if any_violation_history else None
-                            ),
-                            "distinct_prior_violation_code_count": (
-                                len(code_stats) if any_violation_history else None
-                            ),
-                            "prior_top_violation_code_count": (
-                                code_stats[top_code]["citations"] if top_code else None
-                            ),
-                            "prior_top_violation_inspection_count": (
-                                len(code_stats[top_code]["inspection_ids"]) if top_code else None
-                            ),
-                            "nyc_previous_day_score": nyc_snap["previous_day_value"],
-                            "nyc_previous_day_score_complete": nyc_snap["previous_day_complete"],
-                            "nyc_prior_valid_score_count": nyc_snap["valid_count"],
-                            "nyc_score_prior_mean": nyc_snap["mean"],
-                            "nyc_score_prior_max": nyc_snap["max"],
-                            "nyc_score_prior_variance": nyc_snap["variance"],
-                            "nyc_score_variance_available": nyc_snap["variance_available"],
-                            "nyc_score_prior_time_trend": nyc_snap["trend"],
-                            "nyc_score_trend_available": nyc_snap["trend_available"],
-                            "nyc_previous_day_critical_violation_count": nyc_crit_snap[
-                                "previous_day_value"
-                            ],
-                            "nyc_previous_day_critical_violation_count_complete": nyc_crit_snap[
-                                "previous_day_complete"
-                            ],
-                            "nyc_prior_critical_violation_total": (
-                                int(nyc_crit_snap["sum"])
-                                if nyc_crit_snap["sum"] is not None
-                                else None
-                            ),
-                            "fl_previous_day_high_priority_count": fl_high_snap[
-                                "previous_day_value"
-                            ],
-                            "fl_previous_day_high_priority_count_complete": fl_high_snap[
-                                "previous_day_complete"
-                            ],
-                            "fl_previous_day_intermediate_count": fl_inter_snap[
-                                "previous_day_value"
-                            ],
-                            "fl_previous_day_intermediate_count_complete": fl_inter_snap[
-                                "previous_day_complete"
-                            ],
-                            "fl_previous_day_basic_count": fl_basic_snap["previous_day_value"],
-                            "fl_previous_day_basic_count_complete": fl_basic_snap[
-                                "previous_day_complete"
-                            ],
-                            "fl_previous_day_total_violation_count": fl_total_snap[
-                                "previous_day_value"
-                            ],
-                            "fl_previous_day_total_violation_count_complete": fl_total_snap[
-                                "previous_day_complete"
-                            ],
-                            "fl_total_violation_prior_mean": fl_total_snap["mean"],
-                            "fl_total_violation_prior_max": fl_total_snap["max"],
-                            "fl_total_violation_prior_variance": fl_total_snap["variance"],
-                            "fl_total_violation_variance_available": fl_total_snap[
-                                "variance_available"
-                            ],
-                            "fl_total_violation_prior_time_trend": fl_total_snap["trend"],
-                            "fl_total_violation_trend_available": fl_total_snap["trend_available"],
-                            "fl_high_priority_prior_mean": fl_high_snap["mean"],
-                            "fl_high_priority_prior_max": fl_high_snap["max"],
-                            "fl_prior_inspections_with_high_priority": (
-                                fl_inspections_with_hp
-                                if jurisdiction == "florida" and history_depth
-                                else None
-                            ),
-                            "fl_prior_high_priority_total": (
-                                int(fl_high_snap["sum"])
-                                if fl_high_snap["sum"] is not None
-                                else None
-                            ),
-                            "fl_prior_valid_high_priority_count": fl_high_snap["valid_count"],
-                            "fl_prior_valid_intermediate_count": fl_inter_snap["valid_count"],
-                            "fl_prior_valid_basic_count": fl_basic_snap["valid_count"],
-                            "fl_prior_valid_total_count": fl_total_snap["valid_count"],
-                            "fl_prior_follow_up_required_count": (
-                                fl_follow_up_total
-                                if jurisdiction == "florida" and history_depth
-                                else None
-                            ),
-                            "fl_prior_temporary_closure_count": (
-                                fl_temp_closure_total
-                                if jurisdiction == "florida" and history_depth
-                                else None
+                            **_feature_values_from_state(
+                                jurisdiction=jurisdiction,
+                                history_depth=history_depth,
+                                prior_inspection_day_count=prior_day_count,
+                                days_since_previous_inspection_date=days_since,
+                                nyc_snap=nyc_snap,
+                                nyc_crit_snap=nyc_crit_snap,
+                                fl_high_snap=fl_high_snap,
+                                fl_inter_snap=fl_inter_snap,
+                                fl_basic_snap=fl_basic_snap,
+                                fl_total_snap=fl_total_snap,
+                                code_stats=code_stats,
+                                top_code=top_code,
+                                any_violation_history=any_violation_history,
+                                viol_total_citations=viol_total_citations,
+                                viol_inspection_ids_seen=viol_inspection_ids_seen,
+                                fl_inspections_with_hp=fl_inspections_with_hp,
+                                fl_follow_up_total=fl_follow_up_total,
+                                fl_temp_closure_total=fl_temp_closure_total,
                             ),
                         }
                     )
-
-                    feature_dict = feature_records[-1]
-                    for key in list(feature_dict):
-                        if jurisdiction != "nyc" and key.startswith("nyc_"):
-                            feature_dict[key] = None
-                        if jurisdiction != "florida" and key.startswith("fl_"):
-                            feature_dict[key] = None
 
                     audit_records.append(
                         {
@@ -739,6 +761,382 @@ def build_temporal_features(
         features=features,
         audit=audit,
         availability_report=availability_report,
+        build_report=build_report,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# As-of ("current standing") snapshot -- Task 7                              #
+# --------------------------------------------------------------------------- #
+
+ASOF_IDENTITY_SCHEMA: dict[str, pl.DataType] = {
+    "restaurant_id": pl.String(),
+    "jurisdiction": pl.String(),
+    "as_of_date": pl.Date(),
+    "previous_inspection_date": pl.Date(),
+    "dba": pl.String(),
+    "cuisine_description": pl.String(),
+    "boro_raw": pl.String(),
+    "zipcode": pl.String(),
+}
+
+ASOF_FEATURE_SCHEMA: dict[str, pl.DataType] = {
+    "restaurant_id": pl.String(),
+    **{name: dtype for name, dtype in FEATURE_SCHEMA.items() if name != "inspection_id"},
+}
+
+ASOF_AUDIT_SCHEMA: dict[str, pl.DataType] = {
+    "restaurant_id": pl.String(),
+    "nyc_previous_day_grade": pl.String(),
+    "fl_previous_day_disposition_status": pl.String(),
+    "prior_top_violation_code": pl.String(),
+}
+
+
+class AsOfTemporalFeatureBuildReport(BaseModel):
+    """Deterministic, auditable summary of one ``build_asof_temporal_features``
+    run. Mirrors ``TemporalFeatureBuildReport`` but is keyed by restaurant,
+    not by inspection event, since there is no target inspection event."""
+
+    model_config = ConfigDict(frozen=True)
+
+    input_event_count: int
+    input_violation_count: int
+    restaurant_count: int
+    zero_history_restaurant_count: int
+    excluded_at_or_after_as_of_count: int
+    nyc_same_day_score_incomplete_day_count: int
+    nyc_same_day_score_conflict_day_count: int
+    fl_same_day_incomplete_day_counts: dict[str, int]
+    fl_unknown_disposition_event_count: int
+    as_of_date: date
+    generated_at: datetime
+
+
+@dataclass(frozen=True)
+class AsOfTemporalFeatureResult:
+    identity: pl.DataFrame
+    features: pl.DataFrame
+    audit: pl.DataFrame
+    availability_report: FeatureAvailabilityReport
+    build_report: AsOfTemporalFeatureBuildReport
+
+
+def build_asof_temporal_features(
+    events: pl.DataFrame,
+    violations: pl.DataFrame,
+    as_of_date: date,
+) -> AsOfTemporalFeatureResult:
+    """Build one "current standing" feature row per restaurant, as of
+    ``as_of_date`` -- for scoring a restaurant's *next, not-yet-occurred*
+    inspection, never for retrospective evaluation of a known one.
+
+    ``as_of_date`` is a required, explicit, real calendar date (there is no
+    default -- callers, notably the offline scoring script, must never
+    silently substitute "today"). Only events/violations with
+    ``inspection_date < as_of_date`` contribute; nothing on or after
+    ``as_of_date`` is read. No future inspection, score, violation,
+    disposition, month, season, or inspection type is invented -- a
+    restaurant's row simply reflects everything genuinely known about it as
+    of that date.
+
+    This calls the exact same per-day accumulator arithmetic
+    (``_MeasureAccumulator`` and ``_feature_values_from_state``) that
+    ``build_temporal_features`` uses for training, taken to its final state
+    after folding in every eligible historical date, instead of the
+    snapshot-before-a-specific-event used there. This is the only place the
+    feature algorithm exists; the two callers can never independently drift.
+    """
+    now = datetime.now(UTC)
+    input_event_count = events.height
+    input_violation_count = violations.height
+
+    eligible_events = events.filter(pl.col("inspection_date") < as_of_date)
+    eligible_violations = violations.filter(pl.col("inspection_date") < as_of_date)
+    excluded_count = input_event_count - eligible_events.height
+
+    all_restaurant_ids: list[str] = (
+        events.get_column("restaurant_id").unique().to_list() if events.height else []
+    )
+
+    identity_records: list[dict[str, Any]] = []
+    feature_records: list[dict[str, Any]] = []
+    audit_records: list[dict[str, Any]] = []
+    zero_history_count = 0
+
+    nyc_same_day_incomplete = 0
+    nyc_same_day_conflict = 0
+    fl_same_day_incomplete: dict[str, int] = {
+        "high_priority": 0,
+        "intermediate": 0,
+        "basic": 0,
+        "total": 0,
+    }
+    fl_unknown_disposition_event_count = 0
+
+    eligible_by_restaurant: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if eligible_events.height:
+        for row in eligible_events.sort(
+            ["restaurant_id", "inspection_date", "inspection_id"]
+        ).to_dicts():
+            eligible_by_restaurant[row["restaurant_id"]].append(row)
+
+    violations_by_key: dict[tuple[str, date], list[dict[str, Any]]] = defaultdict(list)
+    if eligible_violations.height:
+        for row in eligible_violations.sort(["restaurant_id", "inspection_date"]).to_dicts():
+            violations_by_key[(row["restaurant_id"], row["inspection_date"])].append(row)
+
+    # Jurisdiction and the latest known descriptive fields must come only
+    # from the restaurant's own recorded events -- including an ineligible
+    # (on/after as_of_date) one purely for identity metadata such as
+    # jurisdiction, never for history.
+    latest_any_row_by_restaurant: dict[str, dict[str, Any]] = {}
+    if events.height:
+        for row in events.sort(["restaurant_id", "inspection_date", "inspection_id"]).to_dicts():
+            latest_any_row_by_restaurant[row["restaurant_id"]] = row
+
+    for restaurant_id in sorted(all_restaurant_ids):
+        rows = eligible_by_restaurant.get(restaurant_id, [])
+        jurisdiction = latest_any_row_by_restaurant[restaurant_id]["jurisdiction"]
+
+        if not rows:
+            zero_history_count += 1
+            empty = _MeasureAccumulator(additive=False).snapshot()
+            empty_additive = _MeasureAccumulator(additive=True).snapshot()
+            feature_records.append(
+                {
+                    "restaurant_id": restaurant_id,
+                    **_feature_values_from_state(
+                        jurisdiction=jurisdiction,
+                        history_depth=0,
+                        prior_inspection_day_count=0,
+                        days_since_previous_inspection_date=None,
+                        nyc_snap=empty,
+                        nyc_crit_snap=empty_additive,
+                        fl_high_snap=empty_additive,
+                        fl_inter_snap=empty_additive,
+                        fl_basic_snap=empty_additive,
+                        fl_total_snap=empty_additive,
+                        code_stats={},
+                        top_code=None,
+                        any_violation_history=False,
+                        viol_total_citations=0,
+                        viol_inspection_ids_seen=set(),
+                        fl_inspections_with_hp=0,
+                        fl_follow_up_total=0,
+                        fl_temp_closure_total=0,
+                    ),
+                }
+            )
+            identity_records.append(
+                {
+                    "restaurant_id": restaurant_id,
+                    "jurisdiction": jurisdiction,
+                    "as_of_date": as_of_date,
+                    "previous_inspection_date": None,
+                    "dba": None,
+                    "cuisine_description": None,
+                    "boro_raw": None,
+                    "zipcode": None,
+                }
+            )
+            audit_records.append(
+                {
+                    "restaurant_id": restaurant_id,
+                    "nyc_previous_day_grade": None,
+                    "fl_previous_day_disposition_status": None,
+                    "prior_top_violation_code": None,
+                }
+            )
+            continue
+
+        by_date: dict[date, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            by_date[row["inspection_date"]].append(row)
+        sorted_dates = sorted(by_date)
+        first_date = sorted_dates[0]
+
+        history_depth = 0
+        prior_day_count = 0
+        previous_date: date | None = None
+
+        nyc_score_acc = _MeasureAccumulator(additive=False)
+        nyc_critical_acc = _MeasureAccumulator(additive=True)
+        nyc_prev_day_grade: str | None = None
+
+        fl_high_acc = _MeasureAccumulator(additive=True)
+        fl_inter_acc = _MeasureAccumulator(additive=True)
+        fl_basic_acc = _MeasureAccumulator(additive=True)
+        fl_total_acc = _MeasureAccumulator(additive=True)
+        fl_inspections_with_hp = 0
+        fl_follow_up_total = 0
+        fl_temp_closure_total = 0
+        fl_prev_day_disposition: str | None = None
+
+        viol_total_citations = 0
+        viol_inspection_ids_seen: set[str] = set()
+        code_stats: dict[str, dict[str, Any]] = {}
+        any_violation_history = False
+
+        for current_date in sorted_dates:
+            today_rows = by_date[current_date]
+            today_violations = violations_by_key.get((restaurant_id, current_date), [])
+            elapsed_days = float((current_date - first_date).days)
+
+            if jurisdiction == "nyc":
+                score_values = [
+                    None if r.get("score_conflict") else r.get("score") for r in today_rows
+                ]
+                was_complete = nyc_score_acc.fold_day(elapsed_days, score_values)
+                if not was_complete:
+                    non_null = [v for v in score_values if v is not None]
+                    if len(non_null) == len(score_values) and len(score_values) > 1:
+                        nyc_same_day_conflict += 1
+                    else:
+                        nyc_same_day_incomplete += 1
+                critical_values = [r.get("critical_violation_count") for r in today_rows]
+                nyc_critical_acc.fold_day(elapsed_days, critical_values)
+
+                trusted_grades = [
+                    r.get("grade")
+                    for r in today_rows
+                    if r.get("grade") and not r.get("grade_conflict")
+                ]
+                nyc_prev_day_grade = trusted_grades[0] if len(set(trusted_grades)) == 1 else None
+
+            if jurisdiction == "florida":
+                hp_values = [r.get("high_priority_count") for r in today_rows]
+                fl_high_acc.fold_day(elapsed_days, hp_values)
+                if any(v is None for v in hp_values):
+                    fl_same_day_incomplete["high_priority"] += 1
+
+                inter_values = [r.get("intermediate_count") for r in today_rows]
+                fl_inter_acc.fold_day(elapsed_days, inter_values)
+                if any(v is None for v in inter_values):
+                    fl_same_day_incomplete["intermediate"] += 1
+
+                basic_values = [r.get("basic_count") for r in today_rows]
+                fl_basic_acc.fold_day(elapsed_days, basic_values)
+                if any(v is None for v in basic_values):
+                    fl_same_day_incomplete["basic"] += 1
+
+                total_values = [r.get("violation_count") for r in today_rows]
+                fl_total_acc.fold_day(elapsed_days, total_values)
+                if any(v is None for v in total_values):
+                    fl_same_day_incomplete["total"] += 1
+
+                for r in today_rows:
+                    hp = r.get("high_priority_count")
+                    if hp is not None and hp > 0:
+                        fl_inspections_with_hp += 1
+                    status = r.get("disposition_status")
+                    if status == "follow_up_required":
+                        fl_follow_up_total += 1
+                    elif status == "temporary_closure":
+                        fl_temp_closure_total += 1
+                    elif status not in _KNOWN_FL_DISPOSITION_STATUSES:
+                        fl_unknown_disposition_event_count += 1
+
+                distinct_dispositions = {
+                    r.get("disposition_status") for r in today_rows if r.get("disposition_status")
+                }
+                fl_prev_day_disposition = (
+                    next(iter(distinct_dispositions)) if len(distinct_dispositions) == 1 else None
+                )
+
+            for v in today_violations:
+                code = v.get("violation_code")
+                viol_inspection_id = v.get("inspection_id")
+                if not code or not viol_inspection_id:
+                    continue
+                count = v.get("count") or 0
+                stats = code_stats.setdefault(code, {"citations": 0, "inspection_ids": set()})
+                stats["citations"] += count
+                stats["inspection_ids"].add(viol_inspection_id)
+                viol_total_citations += count
+                viol_inspection_ids_seen.add(viol_inspection_id)
+                any_violation_history = True
+
+            history_depth += len(today_rows)
+            prior_day_count += 1
+            previous_date = current_date
+
+        latest_row = rows[-1]
+        days_since = (as_of_date - previous_date).days if previous_date else None
+
+        feature_records.append(
+            {
+                "restaurant_id": restaurant_id,
+                **_feature_values_from_state(
+                    jurisdiction=jurisdiction,
+                    history_depth=history_depth,
+                    prior_inspection_day_count=prior_day_count,
+                    days_since_previous_inspection_date=days_since,
+                    nyc_snap=nyc_score_acc.snapshot(),
+                    nyc_crit_snap=nyc_critical_acc.snapshot(),
+                    fl_high_snap=fl_high_acc.snapshot(),
+                    fl_inter_snap=fl_inter_acc.snapshot(),
+                    fl_basic_snap=fl_basic_acc.snapshot(),
+                    fl_total_snap=fl_total_acc.snapshot(),
+                    code_stats=code_stats,
+                    top_code=_select_top_code(code_stats),
+                    any_violation_history=any_violation_history,
+                    viol_total_citations=viol_total_citations,
+                    viol_inspection_ids_seen=viol_inspection_ids_seen,
+                    fl_inspections_with_hp=fl_inspections_with_hp,
+                    fl_follow_up_total=fl_follow_up_total,
+                    fl_temp_closure_total=fl_temp_closure_total,
+                ),
+            }
+        )
+        identity_records.append(
+            {
+                "restaurant_id": restaurant_id,
+                "jurisdiction": jurisdiction,
+                "as_of_date": as_of_date,
+                "previous_inspection_date": previous_date,
+                "dba": latest_row.get("dba"),
+                "cuisine_description": latest_row.get("cuisine_description"),
+                "boro_raw": latest_row.get("boro_raw"),
+                "zipcode": latest_row.get("zipcode"),
+            }
+        )
+        audit_records.append(
+            {
+                "restaurant_id": restaurant_id,
+                "nyc_previous_day_grade": nyc_prev_day_grade if jurisdiction == "nyc" else None,
+                "fl_previous_day_disposition_status": (
+                    fl_prev_day_disposition if jurisdiction == "florida" else None
+                ),
+                "prior_top_violation_code": _select_top_code(code_stats),
+            }
+        )
+
+    identity = finalize_event_frame(identity_records, ASOF_IDENTITY_SCHEMA).sort("restaurant_id")
+    features = finalize_event_frame(feature_records, ASOF_FEATURE_SCHEMA).sort("restaurant_id")
+    audit = finalize_event_frame(audit_records, ASOF_AUDIT_SCHEMA).sort("restaurant_id")
+
+    assert_model_matrix_is_safe(features.drop("restaurant_id"))
+
+    build_report = AsOfTemporalFeatureBuildReport(
+        input_event_count=input_event_count,
+        input_violation_count=input_violation_count,
+        restaurant_count=len(all_restaurant_ids),
+        zero_history_restaurant_count=zero_history_count,
+        excluded_at_or_after_as_of_count=excluded_count,
+        nyc_same_day_score_incomplete_day_count=nyc_same_day_incomplete,
+        nyc_same_day_score_conflict_day_count=nyc_same_day_conflict,
+        fl_same_day_incomplete_day_counts=fl_same_day_incomplete,
+        fl_unknown_disposition_event_count=fl_unknown_disposition_event_count,
+        as_of_date=as_of_date,
+        generated_at=now,
+    )
+
+    return AsOfTemporalFeatureResult(
+        identity=identity,
+        features=features,
+        audit=audit,
+        availability_report=_build_availability_report(),
         build_report=build_report,
     )
 
