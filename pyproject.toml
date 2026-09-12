@@ -14,6 +14,9 @@ dependencies = [
   "tzdata>=2024.1",  # IANA tz database for zoneinfo on Windows (polars UTC datetimes)
   "fastexcel>=0.12,<1",  # local, free XLSX reader used by polars.read_excel (Florida historical archives)
   "rapidfuzz>=3.9,<4",  # local, free (MIT) fuzzy string matching for restaurant-name similarity
+  "scikit-learn>=1.6,<2",  # local, free (BSD); >=1.6 required for sklearn.frozen.FrozenEstimator
+  "joblib>=1.4,<2",  # local, free (BSD); explicit model-artifact serialization
+  "numpy>=1.26,<3",  # local, free (BSD); used directly for model matrices/bootstrap resampling
 ]
 
 [project.optional-dependencies]
@@ -43,6 +46,10 @@ python_version = "3.12"
 strict = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "joblib.*"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["plateproof"]
