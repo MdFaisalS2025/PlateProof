@@ -10,8 +10,6 @@ from __future__ import annotations
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from plateproof.features.temporal import MODEL_FEATURE_ALLOWLIST
-
 NYC_PRIMARY_QUALIFYING_TYPES = frozenset(
     {
         "Cycle Inspection / Initial Inspection",
@@ -22,8 +20,33 @@ NYC_PRIMARY_QUALIFYING_TYPES = frozenset(
 NYC_PRIMARY_SCORE_THRESHOLD = 14.0
 NYC_SCORE_GE_28_THRESHOLD = 28.0
 
-NYC_FEATURE_LIST: tuple[str, ...] = tuple(
-    sorted(name for name in MODEL_FEATURE_ALLOWLIST if not name.startswith("fl_"))
+# Explicit, ordered, and frozen at authoring time. Deliberately NOT derived
+# from MODEL_FEATURE_ALLOWLIST at import time: a feature added to Task 5's
+# allowlist later must never silently enter this already-selected model's
+# schema. Extending this model to a new feature is a deliberate code change
+# here, verified against the allowlist by assert_jurisdiction_feature_list.
+NYC_FEATURE_LIST: tuple[str, ...] = (
+    "days_since_previous_inspection_date",
+    "distinct_prior_violation_code_count",
+    "history_depth",
+    "missing_history",
+    "nyc_previous_day_critical_violation_count",
+    "nyc_previous_day_critical_violation_count_complete",
+    "nyc_previous_day_score",
+    "nyc_previous_day_score_complete",
+    "nyc_prior_critical_violation_total",
+    "nyc_prior_valid_score_count",
+    "nyc_score_prior_max",
+    "nyc_score_prior_mean",
+    "nyc_score_prior_time_trend",
+    "nyc_score_prior_variance",
+    "nyc_score_trend_available",
+    "nyc_score_variance_available",
+    "prior_inspection_day_count",
+    "prior_inspections_with_any_violation",
+    "prior_top_violation_code_count",
+    "prior_top_violation_inspection_count",
+    "prior_violation_total_citation_count",
 )
 
 

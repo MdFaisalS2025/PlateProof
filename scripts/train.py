@@ -15,14 +15,20 @@ from pathlib import Path
 from typing import Any
 
 from plateproof.models.calibration import calibrate_on_validation
+from plateproof.models.florida_risk import FL_QUALIFYING_TYPE
+from plateproof.models.nyc_risk import NYC_PRIMARY_QUALIFYING_TYPES
 from plateproof.models.training import (
+    CANDIDATE_BUILDERS,
     MIN_SUCCESSFUL_BOOTSTRAP_MEMBERS,
     N_BOOTSTRAP_PRODUCTION_DEFAULT,
-    PrevalenceBaseline,
+    RANDOM_SEED,
+    ModelReadinessStatus,
     SplitBoundaries,
+    aligned_restaurant_ids,
+    assemble_production_bundle,
     assemble_training_frame,
-    build_hgb,
-    build_logistic_pipeline,
+    assert_bootstrap_inputs_aligned,
+    build_selected_model_configuration,
     chronological_split,
     compute_metrics,
     feature_matrix,
@@ -39,11 +45,94 @@ TARGET_JURISDICTION: dict[str, str] = {
     "florida_next_temporary_closure": "florida",
 }
 
-_CANDIDATE_BUILDERS: dict[str, Any] = {
-    "prevalence": PrevalenceBaseline,
-    "logistic_regression": build_logistic_pipeline,
-    "hist_gradient_boosting": build_hgb,
+_TARGET_METADATA: dict[str, dict[str, Any]] = {
+    "nyc_next_initial_score_ge_14": {
+        "definition": (
+            "label = 1 iff an exactly-qualifying initial NYC inspection's own score is "
+            ">= 14 and unconflicted; the row is excluded otherwise."
+        ),
+        "eligible_inspection_types": sorted(NYC_PRIMARY_QUALIFYING_TYPES),
+        "excluded_inspection_types": [
+            "all non-qualifying NYC inspection types",
+            "qualifying inspections with a missing or conflicted score",
+        ],
+        "feature_categories": [
+            "shared inspection-history features (days since prior visit, prior violation counts)",
+            "NYC score history (previous score, prior mean/max/variance/trend)",
+            "NYC critical-violation history",
+        ],
+    },
+    "nyc_next_score_ge_28": {
+        "definition": "label = 1 iff the next qualifying NYC inspection's own score is >= 28.",
+        "eligible_inspection_types": sorted(NYC_PRIMARY_QUALIFYING_TYPES),
+        "excluded_inspection_types": [
+            "all non-qualifying NYC inspection types",
+            "qualifying inspections with a missing or conflicted score",
+        ],
+        "feature_categories": [
+            "shared inspection-history features",
+            "NYC score history",
+            "NYC critical-violation history",
+        ],
+    },
+    "nyc_next_any_critical_violation": {
+        "definition": (
+            "label = 1 iff the next qualifying NYC inspection's own "
+            "critical_violation_count is >= 1."
+        ),
+        "eligible_inspection_types": sorted(NYC_PRIMARY_QUALIFYING_TYPES),
+        "excluded_inspection_types": ["all non-qualifying NYC inspection types"],
+        "feature_categories": [
+            "shared inspection-history features",
+            "NYC score history",
+            "NYC critical-violation history",
+        ],
+    },
+    "florida_next_routine_high_priority_or_follow_up": {
+        "definition": (
+            "label = 1 iff the initial routine-food visit has any high-priority violation, "
+            "requires follow-up, or resulted in temporary closure."
+        ),
+        "eligible_inspection_types": [FL_QUALIFYING_TYPE],
+        "excluded_inspection_types": [
+            "all non-routine-food Florida inspection types",
+            "non-initial visits",
+            "ambiguous duplicate initial-visit groups",
+            "visits with a missing high-priority count or unrecognized disposition",
+        ],
+        "feature_categories": [
+            "shared inspection-history features",
+            "Florida violation-severity history (high-priority/intermediate/basic counts)",
+        ],
+    },
+    "florida_next_temporary_closure": {
+        "definition": (
+            "label = 1 iff the initial routine-food visit resulted in temporary closure."
+        ),
+        "eligible_inspection_types": [FL_QUALIFYING_TYPE],
+        "excluded_inspection_types": [
+            "all non-routine-food Florida inspection types",
+            "non-initial visits",
+            "visits with an unrecognized disposition",
+        ],
+        "feature_categories": [
+            "shared inspection-history features",
+            "Florida violation-severity history",
+        ],
+    },
 }
+
+_SUBGROUP_LIMITATIONS = (
+    "Subgroup metrics are descriptive and diagnostic only; a subgroup below the minimum "
+    "row, positive, or negative count is suppressed rather than reported unreliably."
+)
+_KNOWN_LIMITATIONS = [
+    "Absolute risk-band thresholds (0.25 / 0.50) are fixed, not validation-derived.",
+    "The model is trained on one jurisdiction/target only and does not generalize across "
+    "jurisdictions.",
+    "Uncertainty intervals come from a restaurant-cluster bootstrap and reflect resampling "
+    "variability only, not all sources of real-world uncertainty.",
+]
 
 
 def _build_target(target_name: str, events: Any) -> tuple[Any, Any | None]:
@@ -70,13 +159,13 @@ def _build_target(target_name: str, events: Any) -> tuple[Any, Any | None]:
     raise ValueError(f"unknown target: {target_name!r}")
 
 
-def _load_events(jurisdiction: str, events_path: Path) -> Any:
+def _load_ingestion_result(jurisdiction: str, events_path: Path) -> Any:
     now = datetime.now(UTC)
     if jurisdiction == "nyc":
         from plateproof.ingestion.nyc import build_nyc_inspection_events, load_nyc_raw
 
         raw = load_nyc_raw(events_path)
-        return build_nyc_inspection_events(raw, ingested_at=now).inspection_events
+        return build_nyc_inspection_events(raw, ingested_at=now)
     from plateproof.ingestion.florida import (
         FloridaExtractSource,
         build_florida_inspection_events,
@@ -84,24 +173,21 @@ def _load_events(jurisdiction: str, events_path: Path) -> Any:
     )
 
     raw = load_florida_extracts([FloridaExtractSource(path=events_path)])
-    return build_florida_inspection_events(raw, ingested_at=now).inspection_events
+    return build_florida_inspection_events(raw, ingested_at=now)
 
 
-def _load_violations(jurisdiction: str, events_path: Path) -> Any:
-    now = datetime.now(UTC)
-    if jurisdiction == "nyc":
-        from plateproof.ingestion.nyc import build_nyc_inspection_events, load_nyc_raw
-
-        raw = load_nyc_raw(events_path)
-        return build_nyc_inspection_events(raw, ingested_at=now).violation_events
-    from plateproof.ingestion.florida import (
-        FloridaExtractSource,
-        build_florida_inspection_events,
-        load_florida_extracts,
-    )
-
-    raw = load_florida_extracts([FloridaExtractSource(path=events_path)])
-    return build_florida_inspection_events(raw, ingested_at=now).violation_events
+def _source_provenance(report: Any) -> dict[str, Any]:
+    """Record what provenance the ingestion report actually carries; any
+    field the report does not supply is recorded as ``"unavailable"``
+    explicitly, never silently omitted."""
+    snapshot_date = getattr(report, "snapshot_date", None)
+    retrieved_at = getattr(report, "retrieved_at_utc", None)
+    sha256 = getattr(report, "source_sha256", None)
+    return {
+        "source_snapshot_date": snapshot_date.isoformat() if snapshot_date else "unavailable",
+        "source_retrieved_at_utc": retrieved_at.isoformat() if retrieved_at else "unavailable",
+        "source_sha256": sha256 or "unavailable",
+    }
 
 
 def _feature_list(jurisdiction: str) -> tuple[str, ...]:
@@ -171,8 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     events_path = Path(args.events)
-    events = _load_events(args.jurisdiction, events_path)
-    violations = _load_violations(args.jurisdiction, events_path)
+    ingestion_result = _load_ingestion_result(args.jurisdiction, events_path)
+    events = ingestion_result.inspection_events
+    violations = ingestion_result.violation_events
     target, target_report = _build_target(args.target, events)
 
     max_date = events.get_column("inspection_date").max()
@@ -198,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     train, validation, test, split_report = chronological_split(frame, boundaries)
 
     selection = fit_and_select_model(train, validation)
+    selected_config = build_selected_model_configuration(
+        selection, frame.feature_order, random_seed=RANDOM_SEED
+    )
 
     Xval = feature_matrix(validation.X, validation.feature_order)
     yval = validation.y.get_column("label").to_numpy()
@@ -218,12 +308,11 @@ def main(argv: list[str] | None = None) -> int:
         ytest, calibration.estimator.predict_proba(Xtest)[:, 1], partition="test"
     )
 
-    build_fn = _CANDIDATE_BUILDERS[selection.selected_candidate]
-    restaurant_ids = (
-        train.identity.join(train.y.select("inspection_id"), on="inspection_id")
-        .get_column("restaurant_id")
-        .to_numpy()
-    )
+    train_inspection_ids = train.X.get_column("inspection_id").to_list()
+    restaurant_ids = aligned_restaurant_ids(train_inspection_ids, train.identity)
+    assert_bootstrap_inputs_aligned(Xtrain, ytrain, train_inspection_ids, restaurant_ids)
+
+    build_fn = CANDIDATE_BUILDERS[selected_config.candidate_name]
     members, uncertainty_config = fit_bootstrap_ensemble(
         build_fn,
         Xtrain,
@@ -233,44 +322,60 @@ def main(argv: list[str] | None = None) -> int:
         yval,
         n_members=args.bootstrap_members,
         min_successful=args.min_successful_bootstrap_members,
+        weighted=selected_config.weighted,
+        base_seed=selected_config.random_seed,
     )
 
+    metadata = _TARGET_METADATA[args.target]
+    bundle = assemble_production_bundle(
+        jurisdiction=args.jurisdiction,
+        target_name=args.target,
+        model_version=args.model_version,
+        feature_order=frame.feature_order,
+        target_definition=metadata["definition"],
+        eligible_inspection_types=metadata["eligible_inspection_types"],
+        excluded_inspection_types=metadata["excluded_inspection_types"],
+        feature_categories=metadata["feature_categories"],
+        split_boundaries=boundaries,
+        split_report=split_report,
+        target_build_report=target_report,
+        selection=selection,
+        selected_config=selected_config,
+        calibration_outcome=calibration,
+        train_metrics=train_metrics,
+        validation_metrics=validation_metrics,
+        test_metrics=test_metrics,
+        test_metrics_computed=True,
+        members=members,
+        uncertainty_config=uncertainty_config,
+        subgroup_limitations=_SUBGROUP_LIMITATIONS,
+        data_snapshot_note=str(_source_provenance(ingestion_result.report)),
+        known_limitations=_KNOWN_LIMITATIONS,
+        source_provenance=_source_provenance(ingestion_result.report),
+        random_seeds={"training": selected_config.random_seed},
+    )
+
+    deployment_status = bundle["deployment_status.json"]
+    readiness_note = (
+        "READY for production prediction"
+        if deployment_status["status"] == ModelReadinessStatus.READY.value
+        else f"NOT approved for production ({deployment_status['status']}): "
+        f"{deployment_status['reason']}"
+    )
     print(
         f"selected={selection.selected_candidate} status={selection.model_status} "
         f"calibration={calibration.report.status.value} "
         f"train_ap={train_metrics.average_precision} "
         f"validation_ap={validation_metrics.average_precision} "
         f"test_ap={test_metrics.average_precision} "
-        f"bootstrap_successful={uncertainty_config.successful_members}"
+        f"bootstrap_successful={uncertainty_config.successful_members} "
+        f"deployment_status={deployment_status['status']} -- {readiness_note}"
     )
 
     if args.validate_only:
         print("validate-only: evaluation complete; no artifact written")
         return 0
 
-    bundle = {
-        "point_estimator.joblib": calibration.estimator,
-        "bootstrap_members.joblib": [m.estimator for m in members if m.success],
-        "selection_report.json": selection.model_dump(exclude={"selected_estimator"}),
-        "calibration_report.json": {
-            "status": calibration.report.status.value,
-            "method": calibration.report.method,
-            "brier_before": calibration.report.brier_before,
-            "brier_after": calibration.report.brier_after,
-            "validation_row_count": calibration.report.validation_row_count,
-        },
-        "uncertainty_config.json": uncertainty_config.model_dump(),
-        "split_report.json": split_report.model_dump(mode="json"),
-        "target_build_report.json": target_report.model_dump()
-        if target_report is not None
-        else None,
-        "metrics.json": {
-            "train": train_metrics.model_dump(),
-            "validation": validation_metrics.model_dump(),
-            "test": test_metrics.model_dump(),
-        },
-        "feature_order.json": list(frame.feature_order),
-    }
     output_path = write_artifact(
         args.output,
         jurisdiction=args.jurisdiction,

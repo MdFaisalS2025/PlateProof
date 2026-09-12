@@ -256,3 +256,27 @@ def test_feature_list_is_ordered_subset_of_allowlist() -> None:
 
     assert set(NYC_FEATURE_LIST) <= MODEL_FEATURE_ALLOWLIST
     assert list(NYC_FEATURE_LIST) == sorted(NYC_FEATURE_LIST)
+
+
+def test_feature_list_is_a_fixed_explicit_tuple_not_derived_from_the_allowlist() -> None:
+    """A future Task 5 feature added to MODEL_FEATURE_ALLOWLIST must never
+    silently enter this already-frozen model's feature schema."""
+    import importlib
+
+    from plateproof.models import nyc_risk
+
+    before = nyc_risk.NYC_FEATURE_LIST
+    import plateproof.features.temporal as temporal_module
+
+    patched_allowlist = frozenset(
+        {*temporal_module.MODEL_FEATURE_ALLOWLIST, "nyc_brand_new_feature"}
+    )
+    original_allowlist = temporal_module.MODEL_FEATURE_ALLOWLIST
+    try:
+        temporal_module.MODEL_FEATURE_ALLOWLIST = patched_allowlist
+        importlib.reload(nyc_risk)
+        assert nyc_risk.NYC_FEATURE_LIST == before
+        assert "nyc_brand_new_feature" not in nyc_risk.NYC_FEATURE_LIST
+    finally:
+        temporal_module.MODEL_FEATURE_ALLOWLIST = original_allowlist
+        importlib.reload(nyc_risk)

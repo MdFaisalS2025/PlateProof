@@ -10,15 +10,50 @@ from __future__ import annotations
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from plateproof.features.temporal import MODEL_FEATURE_ALLOWLIST
-
 FL_QUALIFYING_TYPE = "Routine - Food"
 FL_INITIAL_VISIT_SEQUENCE = 1
 FL_RECOGNIZED_DISPOSITIONS = frozenset({"met_standards", "follow_up_required", "temporary_closure"})
 FL_POSITIVE_DISPOSITIONS = frozenset({"follow_up_required", "temporary_closure"})
 
-FL_FEATURE_LIST: tuple[str, ...] = tuple(
-    sorted(name for name in MODEL_FEATURE_ALLOWLIST if not name.startswith("nyc_"))
+# Explicit, ordered, and frozen at authoring time. Deliberately NOT derived
+# from MODEL_FEATURE_ALLOWLIST at import time: a feature added to Task 5's
+# allowlist later must never silently enter this already-selected model's
+# schema. Extending this model to a new feature is a deliberate code change
+# here, verified against the allowlist by assert_jurisdiction_feature_list.
+FL_FEATURE_LIST: tuple[str, ...] = (
+    "days_since_previous_inspection_date",
+    "distinct_prior_violation_code_count",
+    "fl_high_priority_prior_max",
+    "fl_high_priority_prior_mean",
+    "fl_previous_day_basic_count",
+    "fl_previous_day_basic_count_complete",
+    "fl_previous_day_high_priority_count",
+    "fl_previous_day_high_priority_count_complete",
+    "fl_previous_day_intermediate_count",
+    "fl_previous_day_intermediate_count_complete",
+    "fl_previous_day_total_violation_count",
+    "fl_previous_day_total_violation_count_complete",
+    "fl_prior_follow_up_required_count",
+    "fl_prior_high_priority_total",
+    "fl_prior_inspections_with_high_priority",
+    "fl_prior_temporary_closure_count",
+    "fl_prior_valid_basic_count",
+    "fl_prior_valid_high_priority_count",
+    "fl_prior_valid_intermediate_count",
+    "fl_prior_valid_total_count",
+    "fl_total_violation_prior_max",
+    "fl_total_violation_prior_mean",
+    "fl_total_violation_prior_time_trend",
+    "fl_total_violation_prior_variance",
+    "fl_total_violation_trend_available",
+    "fl_total_violation_variance_available",
+    "history_depth",
+    "missing_history",
+    "prior_inspection_day_count",
+    "prior_inspections_with_any_violation",
+    "prior_top_violation_code_count",
+    "prior_top_violation_inspection_count",
+    "prior_violation_total_citation_count",
 )
 
 

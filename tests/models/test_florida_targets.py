@@ -313,6 +313,30 @@ def test_feature_list_is_ordered_subset_of_allowlist() -> None:
     assert list(FL_FEATURE_LIST) == sorted(FL_FEATURE_LIST)
 
 
+def test_feature_list_is_a_fixed_explicit_tuple_not_derived_from_the_allowlist() -> None:
+    """A future Task 5 feature added to MODEL_FEATURE_ALLOWLIST must never
+    silently enter this already-frozen model's feature schema."""
+    import importlib
+
+    from plateproof.models import florida_risk
+
+    before = florida_risk.FL_FEATURE_LIST
+    import plateproof.features.temporal as temporal_module
+
+    patched_allowlist = frozenset(
+        {*temporal_module.MODEL_FEATURE_ALLOWLIST, "fl_brand_new_feature"}
+    )
+    original_allowlist = temporal_module.MODEL_FEATURE_ALLOWLIST
+    try:
+        temporal_module.MODEL_FEATURE_ALLOWLIST = patched_allowlist
+        importlib.reload(florida_risk)
+        assert florida_risk.FL_FEATURE_LIST == before
+        assert "fl_brand_new_feature" not in florida_risk.FL_FEATURE_LIST
+    finally:
+        temporal_module.MODEL_FEATURE_ALLOWLIST = original_allowlist
+        importlib.reload(florida_risk)
+
+
 def test_no_repeated_violation_category_helper_exists() -> None:
     import plateproof.models.florida_risk as module
 
