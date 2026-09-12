@@ -223,6 +223,32 @@ def test_cli_artifact_is_complete_and_honestly_non_ready_when_uncalibrated(
     assert all(v for v in provenance.values())
 
 
+def test_single_class_test_artifact_from_the_cli_is_not_approved_for_production(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """Requirement 9: narrowing the test window to a single restaurant
+    (2024-07-05, label 1) leaves test single-class -- ``test_ap`` is
+    unavailable and the artifact must never be reported as ready, no matter
+    which non-ready reason fires first for this small fixture."""
+    from plateproof.models.training import load_artifact
+
+    exit_code, output_root = _run_full_pipeline(
+        tmp_path, train_end="2024-05-01", validation_end="2024-07-01", test_end="2024-07-10"
+    )
+    assert exit_code == 0
+    console_output = capsys.readouterr().out
+    assert "test_ap=None" in console_output
+    assert "NOT approved for production" in console_output
+
+    artifact_dir = output_root / "nyc" / "nyc_next_initial_score_ge_14" / "v1"
+    with pytest.raises(ValueError, match="non-ready"):
+        load_artifact(artifact_dir, trusted=True)
+
+    loaded = load_artifact(artifact_dir, trusted=True, require_ready=False)
+    assert loaded["deployment_status.json"]["status"] != "ready"
+    assert "not approved for production" in loaded["model_card.md"].lower()
+
+
 def test_validate_only_runs_the_full_pipeline_but_writes_nothing(tmp_path: Path) -> None:
     """--validate-only must run selection, calibration, and bootstrapping (so
     the console summary is meaningful) without ever writing an artifact."""

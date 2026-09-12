@@ -345,7 +345,6 @@ def main(argv: list[str] | None = None) -> int:
         train_metrics=train_metrics,
         validation_metrics=validation_metrics,
         test_metrics=test_metrics,
-        test_metrics_computed=True,
         members=members,
         uncertainty_config=uncertainty_config,
         subgroup_limitations=_SUBGROUP_LIMITATIONS,

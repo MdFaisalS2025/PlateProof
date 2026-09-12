@@ -302,6 +302,47 @@ def _split_report(*, train_n: int = 10, val_n: int = 10, test_n: int = 10) -> An
     )
 
 
+def _test_metrics(
+    *,
+    positive_count: int = 5,
+    negative_count: int = 5,
+    average_precision: float | None = 0.6,
+    roc_auc: float | None = 0.7,
+    brier_score: float | None = 0.15,
+) -> Any:
+    """A minimal, directly-constructed ``EvaluationMetrics`` for exercising
+    ``determine_readiness``'s test-partition checks without needing to
+    reverse-engineer inputs to ``compute_metrics`` that produce a specific
+    (possibly non-finite/missing) metric value."""
+    from plateproof.models.training import EvaluationMetrics
+
+    row_count = positive_count + negative_count
+    return EvaluationMetrics(
+        partition="test",
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=negative_count,
+        prevalence=(positive_count / row_count) if row_count else None,
+        average_precision=average_precision,
+        average_precision_unavailable_reason=None,
+        roc_auc=roc_auc,
+        roc_auc_unavailable_reason=None,
+        brier_score=brier_score,
+        log_loss_value=0.5,
+        log_loss_unavailable_reason=None,
+        expected_calibration_error=0.05,
+        top_decile_recall=0.5,
+        top_decile_row_count=1,
+        top_decile_unavailable_reason=None,
+        precision_at_threshold=0.5,
+        recall_at_threshold=0.5,
+        threshold=0.5,
+        confusion_matrix={"tp": 1, "fp": 1, "tn": 1, "fn": 1},
+        prediction_mean=0.5,
+        prediction_median=0.5,
+    )
+
+
 def test_underperforming_model_is_not_ready() -> None:
     from plateproof.models.training import ModelReadinessStatus, determine_readiness
 
@@ -311,7 +352,7 @@ def test_underperforming_model_is_not_ready() -> None:
         uncertainty_status="available",
         feature_order=("a",),
         split_report=_split_report(),
-        test_metrics_computed=True,
+        test_metrics=_test_metrics(),
     )
     assert status == ModelReadinessStatus.INSUFFICIENT_PERFORMANCE
     assert reason
@@ -326,7 +367,7 @@ def test_uncalibrated_model_is_not_ready() -> None:
         uncertainty_status="available",
         feature_order=("a",),
         split_report=_split_report(),
-        test_metrics_computed=True,
+        test_metrics=_test_metrics(),
     )
     assert status == ModelReadinessStatus.UNCALIBRATED
     assert reason
@@ -341,7 +382,7 @@ def test_uncertainty_incomplete_model_is_not_ready() -> None:
         uncertainty_status="insufficient_bootstrap_members",
         feature_order=("a",),
         split_report=_split_report(),
-        test_metrics_computed=True,
+        test_metrics=_test_metrics(),
     )
     assert status == ModelReadinessStatus.INSUFFICIENT_UNCERTAINTY
     assert reason
@@ -356,7 +397,7 @@ def test_fully_validated_model_is_ready() -> None:
         uncertainty_status="available",
         feature_order=("a",),
         split_report=_split_report(),
-        test_metrics_computed=True,
+        test_metrics=_test_metrics(),
     )
     assert status == ModelReadinessStatus.READY
     assert reason
@@ -371,9 +412,200 @@ def test_empty_test_partition_is_insufficient_data() -> None:
         uncertainty_status="available",
         feature_order=("a",),
         split_report=_split_report(test_n=0),
-        test_metrics_computed=False,
+        test_metrics=_test_metrics(),
     )
     assert status == ModelReadinessStatus.INSUFFICIENT_DATA
+
+
+# --------------------------------------------------------------------------- #
+# Follow-up correction: a single-class test partition must never be READY    #
+# --------------------------------------------------------------------------- #
+
+
+def test_single_class_test_partition_is_still_permitted_by_chronological_split() -> None:
+    """Requirement 1: chronological_split keeps allowing a nonempty
+    single-class test partition (evaluation/audit still possible)."""
+    from datetime import date
+
+    import polars as pl
+
+    from plateproof.models.training import SplitBoundaries, TrainingFrame, chronological_split
+
+    ids = ["a1", "a2", "b1", "b2", "c1", "c2"]
+    dates = [
+        date(2024, 1, 1),
+        date(2024, 1, 2),
+        date(2024, 3, 1),
+        date(2024, 3, 2),
+        date(2024, 5, 1),
+        date(2024, 5, 2),
+    ]
+    labels = [0, 1, 0, 1, 0, 0]  # test has only class 0
+    X = pl.DataFrame({"inspection_id": ids, "f": [1.0] * len(ids)})
+    y = pl.DataFrame({"inspection_id": ids, "label": labels})
+    identity = pl.DataFrame({"inspection_id": ids, "inspection_date": dates})
+    frame = TrainingFrame(
+        X=X, y=y, identity=identity, feature_order=("f",), target_name="t", jurisdiction="nyc"
+    )
+    boundaries = SplitBoundaries(
+        jurisdiction="nyc",
+        target_name="t",
+        train_end=date(2024, 2, 1),
+        validation_end=date(2024, 4, 1),
+        test_end=date(2024, 6, 1),
+    )
+    _, _, test, _ = chronological_split(frame, boundaries)  # must not raise
+    assert test.y.height == 2
+    assert set(test.y.get_column("label").to_list()) == {0}
+
+
+def test_single_class_test_cannot_produce_ready() -> None:
+    """Requirement 2."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, _ = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(
+            positive_count=10, negative_count=0, average_precision=None, roc_auc=None
+        ),
+    )
+    assert status != ModelReadinessStatus.READY
+    assert status in (ModelReadinessStatus.EVALUATION_ONLY, ModelReadinessStatus.INSUFFICIENT_DATA)
+
+
+def test_single_class_test_produces_a_precise_non_ready_reason() -> None:
+    """Requirement 3."""
+    from plateproof.models.training import determine_readiness
+
+    _, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(
+            positive_count=10, negative_count=0, average_precision=None, roc_auc=None
+        ),
+    )
+    assert "single-class" in reason.lower() or "single class" in reason.lower()
+
+
+def test_missing_test_average_precision_prevents_readiness() -> None:
+    """Requirement 7."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(average_precision=None),
+    )
+    assert status != ModelReadinessStatus.READY
+    assert "average precision" in reason.lower()
+
+
+def test_non_finite_test_average_precision_prevents_readiness() -> None:
+    """Requirement 7 (non-finite variant)."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(average_precision=float("nan")),
+    )
+    assert status != ModelReadinessStatus.READY
+    assert "average precision" in reason.lower()
+
+
+def test_missing_test_brier_score_prevents_readiness() -> None:
+    """Requirement 8."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(brier_score=None),
+    )
+    assert status != ModelReadinessStatus.READY
+    assert "brier" in reason.lower()
+
+
+def test_non_finite_test_brier_score_prevents_readiness() -> None:
+    """Requirement 8 (non-finite variant)."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(brier_score=float("inf")),
+    )
+    assert status != ModelReadinessStatus.READY
+    assert "brier" in reason.lower()
+
+
+def test_single_class_test_artifact_is_rejected_by_default_but_loads_for_audit(
+    tmp_path: Any,
+) -> None:
+    """Requirements 4 and 5: an evaluation-only artifact produced from a
+    single-class test partition is rejected by ``load_artifact`` under the
+    default ``require_ready=True``, and loads under an explicit
+    ``require_ready=False`` audit override."""
+    from plateproof.models.training import (
+        ModelReadinessStatus,
+        assemble_production_bundle,
+        load_artifact,
+        write_artifact,
+    )
+
+    inputs = _minimal_bundle_inputs()
+    inputs["test_metrics"] = _test_metrics(
+        positive_count=8, negative_count=0, average_precision=None, roc_auc=None
+    )
+    bundle = assemble_production_bundle(**inputs)
+    assert bundle["deployment_status.json"]["status"] == ModelReadinessStatus.EVALUATION_ONLY.value
+
+    output = write_artifact(
+        tmp_path, jurisdiction="nyc", target_name="t", model_version="v1", bundle=bundle
+    )
+
+    with pytest.raises(ValueError, match="non-ready"):
+        load_artifact(output, trusted=True)
+
+    loaded = load_artifact(output, trusted=True, require_ready=False)
+    assert loaded["deployment_status.json"]["status"] == ModelReadinessStatus.EVALUATION_ONLY.value
+
+
+def test_two_class_test_with_finite_ap_roc_and_brier_can_become_ready() -> None:
+    """Requirement 6."""
+    from plateproof.models.training import ModelReadinessStatus, determine_readiness
+
+    status, reason = determine_readiness(
+        model_status="validated",
+        calibration_status="calibrated_sigmoid",
+        uncertainty_status="available",
+        feature_order=("a",),
+        split_report=_split_report(),
+        test_metrics=_test_metrics(
+            positive_count=6, negative_count=4, average_precision=0.6, roc_auc=0.7, brier_score=0.1
+        ),
+    )
+    assert status == ModelReadinessStatus.READY
+    assert reason
 
 
 def test_load_artifact_rejects_non_ready_by_default(tmp_path: Any) -> None:
@@ -563,7 +795,6 @@ def _minimal_bundle_inputs(jurisdiction: str = "nyc") -> dict[str, Any]:
         "train_metrics": metrics,
         "validation_metrics": metrics,
         "test_metrics": metrics,
-        "test_metrics_computed": True,
         "members": members,
         "uncertainty_config": uncertainty_config,
         "subgroup_limitations": "Subgroup metrics are suppressed below minimum counts.",
@@ -780,7 +1011,6 @@ def _run_synthetic_training_end_to_end(frame: Any, tmp_path: Any) -> dict[str, A
         train_metrics=train_metrics,
         validation_metrics=validation_metrics,
         test_metrics=test_metrics,
-        test_metrics_computed=True,
         members=members,
         uncertainty_config=uncertainty_config,
         subgroup_limitations="none (synthetic fixture)",

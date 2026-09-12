@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import uuid
 from dataclasses import dataclass
@@ -946,14 +947,24 @@ def determine_readiness(
     uncertainty_status: str,
     feature_order: tuple[str, ...],
     split_report: ChronologicalSplitReport,
-    test_metrics_computed: bool,
+    test_metrics: EvaluationMetrics,
 ) -> tuple[ModelReadinessStatus, str]:
     """A model may be READY only when every one of these independently holds:
     it materially beat the prevalence baseline, calibration succeeded, the
     required number of bootstrap members succeeded, the feature schema is
     present, train/validation/test partitions all passed integrity checks
     (nonempty; train/validation contain both classes -- enforced upstream by
-    ``chronological_split``), and test metrics were actually computed.
+    ``chronological_split``), and the untouched test partition actually
+    supports discrimination evaluation: both classes present, and test
+    average precision, Brier score, and ROC AUC all available and finite.
+
+    ``chronological_split`` still permits a nonempty single-class test
+    partition -- that stays true for evaluation/audit purposes. It simply can
+    never be enough, on its own, for READY: a single-class test yields
+    ``EVALUATION_ONLY`` (or ``INSUFFICIENT_DATA`` if the partition is empty),
+    never a silent READY. This is decided from ``test_metrics``, the typed
+    evaluation actually computed on the test partition -- never from a
+    caller-supplied boolean.
     """
     if not feature_order:
         return ModelReadinessStatus.INSUFFICIENT_DATA, "no feature schema is present"
@@ -979,8 +990,33 @@ def determine_readiness(
             ModelReadinessStatus.INSUFFICIENT_UNCERTAINTY,
             "too few bootstrap members succeeded to report an uncertainty interval",
         )
-    if not test_metrics_computed:
-        return ModelReadinessStatus.EVALUATION_ONLY, "test metrics were not computed"
+    if test_metrics.positive_count == 0 or test_metrics.negative_count == 0:
+        return (
+            ModelReadinessStatus.EVALUATION_ONLY,
+            "the test partition is single-class (positive="
+            f"{test_metrics.positive_count}, negative={test_metrics.negative_count}); "
+            "discrimination metrics (average precision, ROC AUC) are unavailable, so "
+            "this artifact is evaluation-only, not production-ready",
+        )
+    ap = test_metrics.average_precision
+    if ap is None or not math.isfinite(ap):
+        return (
+            ModelReadinessStatus.EVALUATION_ONLY,
+            f"test average precision is unavailable or non-finite (value={ap!r})",
+        )
+    brier = test_metrics.brier_score
+    if brier is None or not math.isfinite(brier):
+        return (
+            ModelReadinessStatus.EVALUATION_ONLY,
+            f"test Brier score is unavailable or non-finite (value={brier!r})",
+        )
+    roc = test_metrics.roc_auc
+    if roc is None or not math.isfinite(roc):
+        return (
+            ModelReadinessStatus.EVALUATION_ONLY,
+            f"test ROC AUC is unavailable or non-finite (value={roc!r}), even though "
+            "both classes are present in test",
+        )
     return ModelReadinessStatus.READY, "all readiness checks passed"
 
 
@@ -1193,7 +1229,6 @@ def assemble_production_bundle(
     train_metrics: EvaluationMetrics,
     validation_metrics: EvaluationMetrics,
     test_metrics: EvaluationMetrics,
-    test_metrics_computed: bool,
     members: list[BootstrapMember],
     uncertainty_config: UncertaintyConfig,
     subgroup_limitations: str,
@@ -1216,7 +1251,7 @@ def assemble_production_bundle(
         uncertainty_status=uncertainty_config.status.value,
         feature_order=feature_order,
         split_report=split_report,
-        test_metrics_computed=test_metrics_computed,
+        test_metrics=test_metrics,
     )
     risk_band_thresholds = RiskBandThresholds(
         jurisdiction=jurisdiction, model_version=model_version
