@@ -21,6 +21,7 @@ dependencies = [
   "uvicorn>=0.30,<1",  # local, free (BSD); ASGI server for the FastAPI app
   "streamlit>=1.38,<2",  # local, free (Apache-2.0); Task 7 MVP interface
   "duckdb>=1.1,<2",  # local, free (MIT); embedded SQL over local Parquet, no server
+  "networkx>=3.3,<4",  # local, free (BSD-3-Clause); Task 8A in-process temporal knowledge graph
 ]
 
 [project.optional-dependencies]
@@ -35,6 +36,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = ["benchmark: exercises timing/memory at a representative synthetic scale"]
 
 [tool.ruff]
 target-version = "py312"
@@ -56,7 +58,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib.*"]
+module = ["sklearn.*", "joblib.*", "networkx.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
