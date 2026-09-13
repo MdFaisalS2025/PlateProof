@@ -1,0 +1,51 @@
+{
+  "manifest_version": "1.0.0",
+  "generated_at": "2026-09-13T00:00:00Z",
+  "documents": [
+    {
+      "document_id": "nyc-doh-inspection-process",
+      "jurisdiction": "nyc",
+      "title": "The Inspection Process",
+      "authority": "NYC Department of Health and Mental Hygiene",
+      "source_url": "https://www.nyc.gov/site/doh/business/food-operators/the-inspection-process.page",
+      "access_date": "2026-09-13",
+      "effective_date": null,
+      "revision_date": null,
+      "superseded": false,
+      "superseded_by": null,
+      "provenance_note": "U.S. municipal government public record (NYC.gov); reproduced as a short, section-scoped extract for factual/informational reference, not republication of the full page.",
+      "file": "documents/nyc-doh-inspection-process.json",
+      "sha256": "0ee254b3efc5af06b77f8f8079f9e04e6eb041c480f386d60b07e4b100a973a7"
+    },
+    {
+      "document_id": "fl-dbpr-violation-classifications",
+      "jurisdiction": "florida",
+      "title": "Hotels and Restaurants – Inspections",
+      "authority": "Florida Department of Business and Professional Regulation, Division of Hotels and Restaurants",
+      "source_url": "https://www2.myfloridalicense.com/hotels-restaurants/inspections/",
+      "access_date": "2026-09-13",
+      "effective_date": null,
+      "revision_date": null,
+      "superseded": false,
+      "superseded_by": null,
+      "provenance_note": "U.S. state government public record (MyFloridaLicense.com); reproduced as short, section-scoped extracts (the page's own violation classification definitions) for factual/informational reference.",
+      "file": "documents/fl-dbpr-violation-classifications.json",
+      "sha256": "03fe6b0b0ed034bc19848c4ef92b8b9d36a563e7e0a339b858272a2b0944d150"
+    },
+    {
+      "document_id": "fda-food-code-overview",
+      "jurisdiction": "federal",
+      "title": "Food Code 2022",
+      "authority": "U.S. Food and Drug Administration",
+      "source_url": "https://www.fda.gov/food/fda-food-code/food-code-2022",
+      "access_date": "2026-09-13",
+      "effective_date": null,
+      "revision_date": "2023-01-18",
+      "superseded": false,
+      "superseded_by": null,
+      "provenance_note": "U.S. federal government public record (FDA.gov); reproduced as a short extract describing the Food Code's purpose. Federal model guidance -- not a jurisdiction-specific enforcement rule; PlateProof never presents this as an NYC or Florida requirement, and no violation code is associated with it.",
+      "file": "documents/fda-food-code-overview.json",
+      "sha256": "b52e480093f32221a14a6aa104cdf4eb86ba3760ecc0a51eba3d5e2a69280c03"
+    }
+  ]
+}
