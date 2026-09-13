@@ -157,17 +157,32 @@ def _safe_metadata_path(directory: Path, name: str) -> Path | None:
     return candidate
 
 
+def _read_bounded_bytes(path: Path) -> tuple[bytes | None, str | None]:
+    """Reads at most ``_MAX_METADATA_BYTES + 1`` bytes from ``path`` -- never
+    the whole file first and only checking its length afterward. Reading
+    one byte past the cap is enough to detect an oversized file without
+    ever materializing more than a bounded amount of untrusted content in
+    memory, regardless of how large the real file on disk actually is.
+    Returns ``(None, reason)`` on any expected failure; never raises."""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_METADATA_BYTES + 1)
+    except OSError:
+        return None, "metadata file could not be read"
+    if len(raw) > _MAX_METADATA_BYTES:
+        return None, "metadata file exceeds the maximum allowed size"
+    return raw, None
+
+
 def _read_json_file(path: Path) -> tuple[Any, str | None]:
     """Reads and parses one already-path-checked file. Returns ``(value,
     None)`` on success or ``(None, reason)`` on any expected failure --
     never raises, and the reason never includes a path or raw exception
     text."""
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None, "metadata file could not be read"
-    if len(raw) > _MAX_METADATA_BYTES:
-        return None, "metadata file exceeds the maximum allowed size"
+    raw, error = _read_bounded_bytes(path)
+    if error is not None:
+        return None, error
+    assert raw is not None
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -180,12 +195,10 @@ def _read_json_file(path: Path) -> tuple[Any, str | None]:
 
 def _read_text_file(path: Path) -> tuple[str, str | None]:
     """Same contract as :func:`_read_json_file` for a plain-text file."""
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return "", "metadata file could not be read"
-    if len(raw) > _MAX_METADATA_BYTES:
-        return "", "metadata file exceeds the maximum allowed size"
+    raw, error = _read_bounded_bytes(path)
+    if error is not None:
+        return "", error
+    assert raw is not None
     try:
         return raw.decode("utf-8"), None
     except UnicodeDecodeError:
@@ -213,11 +226,12 @@ def _verify_allowlisted_checksums(path: Path, files: Any) -> list[str] | None:
         if safe_path is None:
             mismatches.append(name)
             continue
-        try:
-            actual = hashlib.sha256(safe_path.read_bytes()).hexdigest()
-        except OSError:
+        raw, error = _read_bounded_bytes(safe_path)
+        if error is not None:
             mismatches.append(name)
             continue
+        assert raw is not None
+        actual = hashlib.sha256(raw).hexdigest()
         if actual != expected:
             mismatches.append(name)
     return mismatches

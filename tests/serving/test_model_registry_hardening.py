@@ -145,13 +145,13 @@ def test_absolute_manifest_path_is_rejected_without_reading_the_target(
         tmp_path, build_ready_artifact, poisoned_name=poisoned_name
     )
 
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
 
-    def _guarded_read_bytes(self: Path) -> bytes:
-        assert self != outside, "must never read a manifest-supplied absolute path"
-        return original_read_bytes(self)
+    def _guarded_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        assert self != outside, "must never open a manifest-supplied absolute path"
+        return original_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", _guarded_read_bytes)
+    monkeypatch.setattr(Path, "open", _guarded_open)
 
     metadata, reason = _read_metadata(artifact)
     # deployment_status.json's checksum entry is now unreachable under its
@@ -169,13 +169,13 @@ def test_parent_traversal_manifest_path_is_rejected_without_reading_the_target(
     outside = artifact.parent / "outside_secret.txt"
     outside.write_text("must never be read", encoding="utf-8")
 
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
 
-    def _guarded_read_bytes(self: Path) -> bytes:
-        assert self.resolve() != outside.resolve(), "must never read a path escaping the artifact"
-        return original_read_bytes(self)
+    def _guarded_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        assert self.resolve() != outside.resolve(), "must never open a path escaping the artifact"
+        return original_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", _guarded_read_bytes)
+    monkeypatch.setattr(Path, "open", _guarded_open)
 
     metadata, reason = _read_metadata(artifact)
     assert metadata is None
@@ -315,6 +315,60 @@ def test_oversized_metadata_document_fails_closed(
     assert reason is not None
 
 
+def test_oversized_file_read_is_bounded_not_just_checked_after_the_fact(
+    tmp_path: Path, build_ready_artifact: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The size cap must bound the actual read from disk -- not merely
+    reject the file after its full content has already been pulled into
+    memory. Otherwise an attacker-sized metadata file (or one placed via a
+    misconfigured/compromised artifact directory) still forces this reader
+    to allocate and hash the whole thing before the cap ever applies,
+    defeating the point of having a resource bound at all."""
+    import hashlib
+
+    from plateproof.models.nyc_risk import NYC_FEATURE_LIST
+    from plateproof.serving import model_registry_service as reg
+
+    artifact = build_ready_artifact(
+        tmp_path,
+        jurisdiction="nyc",
+        target_name="nyc_next_initial_score_ge_14",
+        feature_order=NYC_FEATURE_LIST,
+    )
+    huge = b'{"status": "ready"}' + b" " * (5 * 1024 * 1024)
+    (artifact / "deployment_status.json").write_bytes(huge)
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"]["deployment_status.json"] = hashlib.sha256(huge).hexdigest()
+    (artifact / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    max_chunk_read = 0
+    original_open = Path.open
+
+    def _tracking_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        handle = original_open(self, *args, **kwargs)
+        if self.name == "deployment_status.json":
+            original_read = handle.read
+
+            def _tracked_read(*a: Any, **k: Any) -> bytes:
+                nonlocal max_chunk_read
+                chunk = original_read(*a, **k)
+                max_chunk_read = max(max_chunk_read, len(chunk))
+                return chunk
+
+            handle.read = _tracked_read  # type: ignore[method-assign]
+        return handle
+
+    monkeypatch.setattr(Path, "open", _tracking_open)
+
+    metadata, reason = _read_metadata(artifact)
+    assert metadata is None
+    assert reason is not None
+    assert max_chunk_read <= reg._MAX_METADATA_BYTES + 1, (
+        f"read a {max_chunk_read}-byte chunk of an oversized file -- the size "
+        "cap must bound the read itself, not just reject it afterward"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Wrong JSON field types: fields with harmless defaults fall back safely;
 # fields that gate readiness fail closed instead of guessing.
@@ -412,14 +466,14 @@ def test_reader_never_opens_estimator_or_bootstrap_files(
         feature_order=NYC_FEATURE_LIST,
     )
 
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
 
-    def _guarded_read_bytes(self: Path) -> bytes:
+    def _guarded_open(self: Path, *args: Any, **kwargs: Any) -> Any:
         if self.suffix in (".joblib", ".pickle", ".pkl"):
             raise AssertionError(f"web metadata reader must never open {self.name}")
-        return original_read_bytes(self)
+        return original_open(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", _guarded_read_bytes)
+    monkeypatch.setattr(Path, "open", _guarded_open)
 
     reader = ModelMetadataReader(_settings(nyc_model_artifact_path=artifact))
     metadata = reader.get("nyc")
