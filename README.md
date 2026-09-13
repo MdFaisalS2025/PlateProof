@@ -74,6 +74,17 @@ adapters over a shared `plateproof.serving` service/repository layer backed
 by DuckDB over local Parquet tables. Neither ever downloads data, trains a
 model, or deserializes a model artifact inside a request/page load.
 
+**Trust boundary:** offline administrative scoring
+(`plateproof/serving/scoring.py`, run via `scripts/score_predictions.py`) is
+the only code permitted to call `load_artifact`/`joblib.load` against a
+locally configured, administrator-trusted artifact path. The running web
+application (every FastAPI route and every Streamlit page) consumes only
+sanitized metadata (`plateproof.serving.model_registry_service
+.ModelMetadataReader`, which parses just a fixed allowlist of JSON/Markdown
+files and never opens `.joblib`) and precomputed prediction rows -- it never
+deserializes or executes a model artifact, even if `load_artifact` is
+broken, patched, or removed.
+
 Build the processed tables from already-downloaded extracts (never
 downloads anything itself):
 

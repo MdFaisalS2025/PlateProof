@@ -1,10 +1,14 @@
 """FastAPI app factory for the PlateProof service.
 
 ``create_app`` builds a fresh, isolated app: its own repository (a DuckDB
-connection over the configured Parquet tables) and its own model cache.
-Tests construct an app against a temporary :class:`Settings` instance
-instead of relying on any module-level singleton, so isolated repositories
-and fake prediction data never leak between tests.
+connection over the configured Parquet tables) and its own model metadata
+reader. Tests construct an app against a temporary :class:`Settings`
+instance instead of relying on any module-level singleton, so isolated
+repositories and fake prediction data never leak between tests.
+
+Neither the repository nor the model metadata reader ever deserializes or
+executes a Task 6 model artifact -- see
+``plateproof.serving.model_registry_service`` for the trust boundary.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from fastapi import FastAPI
 from plateproof.api.errors import register_exception_handlers
 from plateproof.api.routes import deferred, health, models, predictions, restaurants
 from plateproof.core.config import Settings, get_settings
-from plateproof.serving.model_registry_service import ModelCache
+from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import open_repository
 
 
@@ -27,7 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = resolved_settings
     app.state.repository = open_repository(resolved_settings)
-    app.state.model_cache = ModelCache(resolved_settings)
+    app.state.model_metadata = ModelMetadataReader(resolved_settings)
 
     app.include_router(health.router)
     app.include_router(restaurants.router)

@@ -16,11 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from theme import (  # noqa: E402
     configure_page,
     format_jurisdiction_measure_note,
-    model_cache,
+    model_metadata,
     render_independence_footer,
     repository,
     risk_band_html,
 )
+
+from plateproof.serving.prediction_service import resolve_prediction  # noqa: E402
 
 configure_page("Inspection History")
 st.title("📋 Restaurant Detail & Inspection History")
@@ -97,45 +99,40 @@ else:
 
 # 3-5. Forecast, uncertainty, model/date --------------------------------------
 st.subheader("3. PlateProof forecast")
-model = model_cache().get(jurisdiction)
-if model is None:
+availability = resolve_prediction(
+    repo,
+    model_metadata(),
+    restaurant_id=restaurant_id,
+    jurisdiction=jurisdiction,
+    staleness_days=90,
+)
+if availability.status == "no_ready_model":
     st.warning("No ready PlateProof model is currently configured for this jurisdiction.")
-else:
-    lookup = repo.latest_prediction(
-        restaurant_id=restaurant_id,
-        jurisdiction=jurisdiction,
-        target_name=model.target_name,
-        active_model_version=model.model_version,
-        active_artifact_schema_version=model.artifact_schema_version,
-        staleness_days=90,
+elif availability.status == "stale":
+    st.warning("The most recent forecast for this restaurant is out of date (stale).")
+elif availability.status == "not_scored":
+    st.info("No PlateProof forecast has been computed for this restaurant yet.")
+elif availability.status == "insufficient_history":
+    st.info(
+        "This restaurant does not yet have enough recorded history for a forecast "
+        f"({availability.insufficient_history_reason or 'insufficient history'})."
     )
-    if lookup.row is None:
-        if lookup.stale_row_exists:
-            st.warning("The most recent forecast for this restaurant is out of date (stale).")
-        else:
-            st.info("No PlateProof forecast has been computed for this restaurant yet.")
-    else:
-        row_any = dict(lookup.row)
-        if row_any["risk_band"] == "insufficient_history" or row_any["probability"] is None:
-            st.info(
-                "This restaurant does not yet have enough recorded history for a forecast "
-                f"({row_any.get('insufficient_history_reason') or 'insufficient history'})."
-            )
-        else:
-            st.markdown(risk_band_html(row_any["risk_band"]), unsafe_allow_html=True)
-            st.write(
-                f"Probability: {row_any['probability']:.2f} "
-                f"(range {row_any['lower_bound']:.2f}-{row_any['upper_bound']:.2f})"
-            )
-            st.caption(
-                f"Model version: {row_any['model_version']}  |  "
-                f"As of: {row_any['as_of_date']}  |  Generated: {row_any['generated_at']}"
-            )
-            st.markdown(
-                '<div class="pp-disclaimer">This is a PlateProof estimate, not an official '
-                "inspection result.</div>",
-                unsafe_allow_html=True,
-            )
+else:
+    row_any = dict(availability.row)  # type: ignore[arg-type]
+    st.markdown(risk_band_html(row_any["risk_band"]), unsafe_allow_html=True)
+    st.write(
+        f"Probability: {row_any['probability']:.2f} "
+        f"(range {row_any['lower_bound']:.2f}-{row_any['upper_bound']:.2f})"
+    )
+    st.caption(
+        f"Model version: {row_any['model_version']}  |  "
+        f"As of: {row_any['as_of_date']}  |  Generated: {row_any['generated_at']}"
+    )
+    st.markdown(
+        '<div class="pp-disclaimer">This is a PlateProof estimate, not an official '
+        "inspection result.</div>",
+        unsafe_allow_html=True,
+    )
 
 # Michelin context -------------------------------------------------------------
 history = repo.michelin_history(restaurant_id)

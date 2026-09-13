@@ -401,6 +401,20 @@ def test_prediction_available_from_precomputed_ready_record(
             }
         ]
     ).write_parquet(prediction_dir / "predictions.parquet")
+    pl.DataFrame(
+        [
+            {
+                "jurisdiction": "nyc",
+                "target_name": "nyc_next_initial_score_ge_14",
+                "model_version": loaded_manifest["manifest"]["model_version"],
+                "artifact_schema_version": loaded_manifest["artifact_schema_version.json"],
+                "deployment_status": "ready",
+                "registered_at": date.today(),
+                "source_snapshot_date": date.today(),
+                "artifact_path": str(artifact),
+            }
+        ]
+    ).write_parquet(prediction_dir / "model_registry.parquet")
 
     client = make_client(
         processed_data_dir=processed_dir,
@@ -460,6 +474,20 @@ def test_prediction_unavailable_for_insufficient_history(
             }
         ]
     ).write_parquet(prediction_dir / "predictions.parquet")
+    pl.DataFrame(
+        [
+            {
+                "jurisdiction": "nyc",
+                "target_name": "nyc_next_initial_score_ge_14",
+                "model_version": loaded_manifest["manifest"]["model_version"],
+                "artifact_schema_version": loaded_manifest["artifact_schema_version.json"],
+                "deployment_status": "ready",
+                "registered_at": date.today(),
+                "source_snapshot_date": date.today(),
+                "artifact_path": str(artifact),
+            }
+        ]
+    ).write_parquet(prediction_dir / "model_registry.parquet")
 
     client = make_client(
         processed_data_dir=processed_dir,

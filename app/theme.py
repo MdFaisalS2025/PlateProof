@@ -12,7 +12,7 @@ import streamlit as st
 
 from plateproof.core.config import Settings, get_settings
 from plateproof.serving.display import INDEPENDENCE_STATEMENT
-from plateproof.serving.model_registry_service import ModelCache
+from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import Repository, open_repository
 
 PAGE_TITLE = "PlateProof"
@@ -85,7 +85,7 @@ def render_independence_footer() -> None:
 # without a full ScriptRunContext, where Streamlit's own cache can't key
 # reliably run-to-run).
 _repository_cache: dict[str, Repository] = {}
-_model_cache_cache: dict[str, ModelCache] = {}
+_model_metadata_cache: dict[str, ModelMetadataReader] = {}
 
 
 def repository() -> Repository:
@@ -96,12 +96,14 @@ def repository() -> Repository:
     return _repository_cache[key]
 
 
-def model_cache() -> ModelCache:
+def model_metadata() -> ModelMetadataReader:
+    """Sanitized metadata only -- never deserializes or executes a model
+    artifact. See ``plateproof.serving.model_registry_service``."""
     settings = get_settings()
     key = _cache_key(settings)
-    if key not in _model_cache_cache:
-        _model_cache_cache[key] = ModelCache(settings)
-    return _model_cache_cache[key]
+    if key not in _model_metadata_cache:
+        _model_metadata_cache[key] = ModelMetadataReader(settings)
+    return _model_metadata_cache[key]
 
 
 def _cache_key(settings: Settings) -> str:
