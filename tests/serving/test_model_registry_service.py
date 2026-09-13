@@ -1,11 +1,13 @@
 """Tests for the metadata-only model reader used by the API and Streamlit.
 
 This reader is the ONLY thing the running web application ever learns about
-a Task 6 model artifact. It never deserializes ``point_estimator.joblib`` or
-``bootstrap_members.joblib`` -- it only reads and JSON/text-parses the small
-set of metadata files a production artifact bundle carries (see
-``plateproof.models.training.assemble_production_bundle``), verifying
-checksums as raw bytes only (hashing, never deserializing).
+a Task 6 model artifact. It never opens, reads, hashes, or deserializes
+``point_estimator.joblib`` or ``bootstrap_members.joblib`` -- it only reads,
+checksum-verifies, and JSON/text-parses the small closed allowlist of
+metadata files a production artifact bundle carries (see
+``plateproof.models.training.assemble_production_bundle``). Full artifact
+verification, including the estimator, is exclusively offline scoring's job
+(``plateproof.models.training.verify_artifact_checksums``/``load_artifact``).
 """
 
 from __future__ import annotations

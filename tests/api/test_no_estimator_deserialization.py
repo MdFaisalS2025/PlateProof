@@ -340,13 +340,18 @@ def test_poisoned_point_estimator_with_valid_checksum_is_never_opened(
     assert card.json()["readiness_status"] == "ready"
 
 
-def test_poisoned_point_estimator_with_tampered_checksum_fails_closed(
+def test_poisoned_point_estimator_with_tampered_checksum_is_ignored_by_the_web_app(
     tmp_path: Path, processed_dir: Path, build_ready_artifact: Any, make_client: Any
 ) -> None:
-    """A poisoned point-estimator file whose bytes do NOT match its manifest
-    checksum (i.e. tampered without also forging the checksum) must be
-    rejected outright -- fail-closed, never a crash, never served as ready."""
+    """The web application's metadata reader verifies checksums only for its
+    closed metadata allowlist (see ``_ALLOWLISTED_METADATA_FILES``) -- it
+    never opens, reads, or hashes ``point_estimator.joblib`` at all, so a
+    tampered estimator with a checksum mismatch is invisible to it, by
+    design: health/model-card still report the model as available. Full
+    artifact integrity (including the estimator) is exclusively offline
+    scoring's responsibility, proven below via ``verify_artifact_checksums``."""
     from plateproof.models.nyc_risk import NYC_FEATURE_LIST
+    from plateproof.models.training import verify_artifact_checksums
 
     artifact = build_ready_artifact(
         tmp_path,
@@ -361,7 +366,10 @@ def test_poisoned_point_estimator_with_tampered_checksum_fails_closed(
     health = client.get("/health")
     assert health.status_code == 200
     nyc_model = next(c for c in health.json()["components"] if c["name"] == "nyc_model")
-    assert nyc_model["status"] == "unavailable"
+    assert nyc_model["status"] == "ok"
 
     card = client.get("/models/nyc/card")
-    assert card.status_code == 404
+    assert card.status_code == 200
+
+    # Offline scoring's full-artifact verification still catches the tamper.
+    assert verify_artifact_checksums(artifact) == ["point_estimator.joblib"]
