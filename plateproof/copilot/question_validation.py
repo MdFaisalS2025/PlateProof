@@ -22,6 +22,17 @@ typed.
 
 from __future__ import annotations
 
+#: The fixed, absolute public-safety ceiling on question length -- always
+#: enforced at the HTTP request-schema boundary (before any Settings
+#: instance exists), independent of the smaller, administrator-configured
+#: operational limit (``Settings.copilot_max_question_length``, itself
+#: constrained to never exceed this constant -- see
+#: ``plateproof.core.config``). A two-level design: this constant is the
+#: hard ceiling nothing may configure past; the operational limit is the
+#: day-to-day bound, enforced again in the API route and inside
+#: ``CopilotService`` as defense in depth.
+ABSOLUTE_MAX_QUESTION_LENGTH = 2_000
+
 _ALLOWED_AFTER_NORMALIZATION = {"\n"}
 
 

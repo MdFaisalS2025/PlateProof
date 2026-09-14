@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from plateproof.copilot.question_validation import sanitize_question
+from plateproof.copilot.question_validation import ABSOLUTE_MAX_QUESTION_LENGTH, sanitize_question
 
 Jurisdiction = Literal["nyc", "florida"]
 RiskBand = Literal["low", "moderate", "high", "insufficient_history"]
@@ -190,12 +190,15 @@ class ApiError(BaseModel):
 # Task 8B: Copilot API contract.                                              #
 # --------------------------------------------------------------------------- #
 
-# Matches plateproof.core.config.Settings.copilot_max_question_length's
-# default. A Pydantic field_validator runs at parse time, before any
-# Settings instance is available, so this bound is intentionally static --
-# CopilotService re-validates with the actually-configured value as the
-# authoritative check regardless (see plateproof.api.routes.copilot).
-_REQUEST_MAX_QUESTION_LENGTH = 500
+# Two-level question-length design: a Pydantic field_validator runs at
+# parse time, before any Settings instance is available, so it can only
+# ever enforce the fixed ABSOLUTE_MAX_QUESTION_LENGTH ceiling -- never the
+# smaller, administrator-configured operational limit
+# (Settings.copilot_max_question_length). The route
+# (plateproof.api.routes.copilot) enforces that tighter operational limit
+# afterward, and CopilotService enforces it again as defense in depth.
+# Settings itself is validated to never allow a configured limit above
+# this ceiling (see plateproof.core.config).
 
 
 class CopilotQueryRequest(BaseModel):
@@ -207,7 +210,7 @@ class CopilotQueryRequest(BaseModel):
     @field_validator("question")
     @classmethod
     def _validate_question(cls, value: str) -> str:
-        sanitized, reason = sanitize_question(value, max_length=_REQUEST_MAX_QUESTION_LENGTH)
+        sanitized, reason = sanitize_question(value, max_length=ABSOLUTE_MAX_QUESTION_LENGTH)
         if sanitized is None:
             assert reason is not None
             raise ValueError(reason)

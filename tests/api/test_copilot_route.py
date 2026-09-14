@@ -247,6 +247,10 @@ def test_graph_unavailable_is_503(
         "/copilot/query", json={"restaurant_id": "nyc:1", "question": "What violations recur?"}
     )
     assert response.status_code == 503
+    # Sanitized: the exact exception type/message never reaches the client.
+    assert "GraphScaleExceededError" not in response.text
+    assert "simulated failure" not in response.text
+    assert "Traceback" not in response.text
 
 
 def test_corpus_unavailable_never_a_503_and_reports_guidance_unavailable(nyc_client: Any) -> None:
@@ -321,3 +325,125 @@ def test_health_reports_local_ai_configured_unverified_when_enabled(
     response = client.get("/health")
     components = {c["name"]: c["status"] for c in response.json()["components"]}
     assert components["local_ai"] == "configured_unverified"
+
+
+def test_health_reports_local_ai_unavailable_when_enabled_but_missing_model(
+    make_client: Any, processed_dir: Any
+) -> None:
+    client = make_client(
+        processed_data_dir=processed_dir, local_llm_enabled=True, local_llm_model=None
+    )
+    response = client.get("/health")
+    components = {c["name"]: c["status"] for c in response.json()["components"]}
+    assert components["local_ai"] == "unavailable"
+
+
+def test_health_reports_local_ai_unavailable_when_enabled_with_invalid_url(
+    make_client: Any, processed_dir: Any
+) -> None:
+    client = make_client(
+        processed_data_dir=processed_dir,
+        local_llm_enabled=True,
+        local_llm_model="fictional-model",
+        local_llm_base_url="http://evil.example.com:11434",
+    )
+    response = client.get("/health")
+    components = {c["name"]: c["status"] for c in response.json()["components"]}
+    assert components["local_ai"] == "unavailable"
+
+
+def test_health_local_ai_unavailable_does_not_degrade_overall_status(
+    make_client: Any, processed_dir: Any
+) -> None:
+    client = make_client(
+        processed_data_dir=processed_dir, local_llm_enabled=True, local_llm_model=None
+    )
+    response = client.get("/health")
+    # Local AI is optional -- its absence/misconfiguration alone must
+    # never take the whole application's reported health down.
+    assert response.json()["status"] != "unavailable"
+
+
+# --------------------------------------------------------------------------- #
+# Correction: reconcile the API's fixed absolute ceiling with the
+# administrator-configured operational question-length limit.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def make_nyc_client(
+    make_client: Any,
+    processed_dir: Any,
+    write_restaurants: Any,
+    write_inspections: Any,
+    write_violations: Any,
+    restaurant_row: Any,
+    inspection_row: Any,
+    violation_row: Any,
+) -> Any:
+    def _make(**overrides: Any) -> Any:
+        _write_graph_fixtures(
+            processed_dir,
+            write_restaurants,
+            write_inspections,
+            write_violations,
+            restaurant_row,
+            inspection_row,
+            violation_row,
+            jurisdiction="nyc",
+            restaurant_id="nyc:1",
+        )
+        return make_client(
+            processed_data_dir=processed_dir, guidance_corpus_manifest_path=None, **overrides
+        )
+
+    return _make
+
+
+def test_question_within_a_configured_limit_below_500_is_accepted(make_nyc_client: Any) -> None:
+    client = make_nyc_client(copilot_max_question_length=50)
+    response = client.post("/copilot/query", json={"restaurant_id": "nyc:1", "question": "a" * 40})
+    assert response.status_code == 200
+
+
+def test_question_exceeding_a_configured_limit_below_500_is_422(make_nyc_client: Any) -> None:
+    client = make_nyc_client(copilot_max_question_length=50)
+    response = client.post("/copilot/query", json={"restaurant_id": "nyc:1", "question": "a" * 100})
+    assert response.status_code == 422
+
+
+def test_question_within_a_configured_limit_above_500_is_accepted(make_nyc_client: Any) -> None:
+    client = make_nyc_client(copilot_max_question_length=1500)
+    response = client.post(
+        "/copilot/query", json={"restaurant_id": "nyc:1", "question": "a" * 1000}
+    )
+    assert response.status_code == 200
+
+
+def test_question_exceeding_a_configured_limit_above_500_is_422(make_nyc_client: Any) -> None:
+    client = make_nyc_client(copilot_max_question_length=1500)
+    response = client.post(
+        "/copilot/query", json={"restaurant_id": "nyc:1", "question": "a" * 1600}
+    )
+    assert response.status_code == 422
+
+
+def test_question_exceeding_the_absolute_ceiling_is_422_regardless_of_configured_limit(
+    make_nyc_client: Any,
+) -> None:
+    from plateproof.copilot.question_validation import ABSOLUTE_MAX_QUESTION_LENGTH
+
+    client = make_nyc_client(copilot_max_question_length=ABSOLUTE_MAX_QUESTION_LENGTH)
+    response = client.post(
+        "/copilot/query",
+        json={"restaurant_id": "nyc:1", "question": "a" * (ABSOLUTE_MAX_QUESTION_LENGTH + 500)},
+    )
+    assert response.status_code == 422
+
+
+def test_rejected_question_is_never_echoed_in_the_422_body(make_nyc_client: Any) -> None:
+    client = make_nyc_client(copilot_max_question_length=50)
+    marker = "SUPER_SECRET_MARKER_" + ("z" * 100)
+    response = client.post("/copilot/query", json={"restaurant_id": "nyc:1", "question": marker})
+    assert response.status_code == 422
+    assert marker not in response.text

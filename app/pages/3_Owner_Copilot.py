@@ -9,7 +9,22 @@ it by itself; see plateproof.copilot.service.CopilotService.answer.
 
 Uses only safe Streamlit primitives -- never Streamlit's raw-HTML
 rendering option anywhere on this page. Official source links use
-st.link_button, never a raw href."""
+st.link_button, never a raw href.
+
+Answer state (independent-review correction): every stored answer is
+tagged with the restaurant it belongs to
+(``copilot_answer_restaurant_id``). The stored answer is cleared the
+moment the active restaurant id no longer matches -- whether from typing a
+new id, selecting a search result, following a query-param link, or the
+id becoming empty/invalid -- so one restaurant's claims, forecast,
+Michelin context, or citations can never be shown beneath another
+restaurant's identity.
+
+Errors shown on this page are always fixed, generic, user-facing messages
+-- never a raw exception type or message -- and each ``try/except`` is
+scoped narrowly around one specific service call, never wrapped around
+unrelated page logic.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +46,11 @@ from theme import (  # noqa: E402
 
 from plateproof.copilot.models import Claim, ClaimType, CopilotAnswer, Intent  # noqa: E402
 from plateproof.copilot.rendering import render_claim  # noqa: E402
+from plateproof.graph.models import GraphScaleExceededError  # noqa: E402
+
+_SEARCH_UNAVAILABLE_MESSAGE = "Restaurant search is temporarily unavailable."
+_RESTAURANT_LOAD_FAILED_MESSAGE = "This restaurant could not be loaded."
+_COPILOT_UNAVAILABLE_MESSAGE = "PlateProof Copilot is temporarily unavailable."
 
 configure_page("Owner Copilot")
 st.title("🧑‍🍳 PlateProof Copilot")
@@ -73,11 +93,25 @@ _GUIDANCE_CLAIM_TYPES = frozenset(
 )
 _MICHELIN_CLAIM_TYPES = frozenset({ClaimType.MICHELIN_CONTEXT})
 
-if "copilot_answer" not in st.session_state:
+
+def _clear_stored_answer() -> None:
     st.session_state["copilot_answer"] = None
+    st.session_state["copilot_answer_restaurant_id"] = None
+
+
+if "copilot_answer" not in st.session_state:
+    _clear_stored_answer()
+if "copilot_search_results" not in st.session_state:
+    st.session_state["copilot_search_results"] = []
 
 settings = get_settings()
-repo = repository()
+
+try:
+    repo = repository()
+except Exception:  # noqa: BLE001 - narrow: only wraps the repository accessor itself
+    st.error(_COPILOT_UNAVAILABLE_MESSAGE)
+    render_independence_footer()
+    st.stop()
 
 if settings.local_llm_enabled:
     st.caption(
@@ -89,29 +123,52 @@ else:
 # --- Restaurant search/selection --------------------------------------- #
 with st.expander("Search by name instead of ID"):
     search_query = st.text_input("Restaurant name", key="copilot_search_query")
-    if st.button("Search", key="copilot_search_button") and search_query:
-        try:
-            result = repo.search_restaurants(
-                query=search_query, jurisdiction=None, limit=10, offset=0
-            )
-        except Exception as exc:  # noqa: BLE001 - shown as a page message, not a traceback
-            st.error(f"Search could not be completed: {type(exc).__name__}")
-            result = None
-        if result is not None:
-            if not result.results:
-                st.info("No restaurants matched that search.")
-            for row in result.results:
-                row_any: dict[str, Any] = dict(row)
-                st.write(
-                    f"`{row_any['restaurant_id']}` -- {row_any.get('name', 'Unnamed restaurant')}"
+    if st.button("Search", key="copilot_search_button"):
+        if not search_query:
+            st.session_state["copilot_search_results"] = []
+        else:
+            try:
+                result = repository().search_restaurants(
+                    query=search_query, jurisdiction=None, limit=10, offset=0
                 )
+            except Exception:  # noqa: BLE001 - narrow: only wraps this one repository call
+                st.error(_SEARCH_UNAVAILABLE_MESSAGE)
+                st.session_state["copilot_search_results"] = []
+            else:
+                st.session_state["copilot_search_results"] = [dict(r) for r in result.results]
+                if not result.results:
+                    st.info("No restaurants matched that search.")
 
-default_id = st.query_params.get("restaurant_id", "")
+    search_results: list[dict[str, Any]] = st.session_state["copilot_search_results"]
+    for row in search_results:
+        restaurant_label_id = row.get("restaurant_id", "")
+        name = row.get("name") or "Unnamed restaurant"
+        jurisdiction_label = str(row.get("jurisdiction") or "").upper()
+        address = row.get("address") or ""
+        city = row.get("city") or ""
+        location = ", ".join(part for part in (address, city) if part)
+        label = f"Select: {name} -- {jurisdiction_label} -- {location} (ID: {restaurant_label_id})"
+        if st.button(label, key=f"copilot_select_{restaurant_label_id}"):
+            st.session_state["copilot_restaurant_id"] = restaurant_label_id
+
+# A widget-bound key must not also receive an explicit `value=` -- session
+# state (search selection, or this one-time seed from the query param) is
+# the only way this field's value is set.
+if "copilot_restaurant_id" not in st.session_state:
+    st.session_state["copilot_restaurant_id"] = st.query_params.get("restaurant_id", "")
+
 restaurant_id = st.text_input(
     "Official restaurant ID (e.g. nyc:12345678 or florida:HR1234567)",
-    value=default_id,
     key="copilot_restaurant_id",
 )
+
+# The single rule every entry path (typing, search selection, the query-
+# param seed) follows: the moment the active restaurant id no longer
+# matches the id an existing answer was produced for, that answer is
+# cleared immediately -- before any new question is asked and before
+# anything is rendered for the new/absent restaurant.
+if st.session_state.get("copilot_answer_restaurant_id") != restaurant_id:
+    _clear_stored_answer()
 
 if not restaurant_id:
     st.info("Enter a restaurant ID above, or search by name, to start.")
@@ -120,13 +177,15 @@ if not restaurant_id:
 
 try:
     restaurant = repo.get_restaurant(restaurant_id)
-except Exception as exc:  # noqa: BLE001
-    st.error(f"Could not look up this restaurant: {type(exc).__name__}")
+except Exception:  # noqa: BLE001 - narrow: only wraps this one repository call
+    st.error(_RESTAURANT_LOAD_FAILED_MESSAGE)
+    _clear_stored_answer()
     render_independence_footer()
     st.stop()
 
 if restaurant is None:
     st.error("No restaurant found for that ID.")
+    _clear_stored_answer()
     render_independence_footer()
     st.stop()
 
@@ -137,15 +196,26 @@ st.header(restaurant_any.get("name") or "Unnamed restaurant")
 st.caption(f"Official ID: `{restaurant_id}`  |  Jurisdiction: {jurisdiction.upper()}")
 st.write(format_jurisdiction_measure_note(jurisdiction))
 
+
+def _record_answer(answer: CopilotAnswer) -> None:
+    st.session_state["copilot_answer"] = answer
+    st.session_state["copilot_answer_restaurant_id"] = restaurant_id
+
+
 # --- Example questions ---------------------------------------------------- #
 st.subheader("Example questions")
 example_cols = st.columns(3)
 for index, (intent, label) in enumerate(_EXAMPLE_LABELS.items()):
     with example_cols[index % 3]:
         if st.button(label, key=f"copilot_intent_{intent.value}"):
-            st.session_state["copilot_answer"] = copilot_service().answer_for_intent(
-                restaurant_id=restaurant_id, intent=intent
-            )
+            try:
+                answer = copilot_service().answer_for_intent(
+                    restaurant_id=restaurant_id, intent=intent
+                )
+            except GraphScaleExceededError:
+                st.error(_COPILOT_UNAVAILABLE_MESSAGE)
+            else:
+                _record_answer(answer)
 
 # --- Free-text question ---------------------------------------------------- #
 st.subheader("Or ask your own question")
@@ -160,12 +230,23 @@ if st.button("Ask PlateProof Copilot", key="copilot_ask_button"):
         st.warning("Please enter a question first.")
     else:
         with st.spinner("PlateProof Copilot is checking documented records..."):
-            st.session_state["copilot_answer"] = copilot_service().answer(
-                restaurant_id=restaurant_id, question=question
-            )
+            try:
+                answer = copilot_service().answer(restaurant_id=restaurant_id, question=question)
+            except GraphScaleExceededError:
+                st.error(_COPILOT_UNAVAILABLE_MESSAGE)
+            else:
+                _record_answer(answer)
 
 # --- Answer display -------------------------------------------------------- #
-answer: CopilotAnswer | None = st.session_state.get("copilot_answer")
+# Only ever shown when the stored answer was produced for THIS restaurant
+# -- the check above already clears it otherwise, but this is the same
+# rule enforced a second time, right at render, as a belt-and-braces
+# guarantee against ever mixing restaurants.
+answer: CopilotAnswer | None = (
+    st.session_state.get("copilot_answer")
+    if st.session_state.get("copilot_answer_restaurant_id") == restaurant_id
+    else None
+)
 
 if answer is not None:
     st.divider()

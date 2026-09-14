@@ -9,7 +9,10 @@ here.
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from plateproof.copilot.question_validation import ABSOLUTE_MAX_QUESTION_LENGTH
 
 #: The application's base directory (the repository root, three levels above
 #: this file: plateproof/core/config.py). Relative Settings paths resolve
@@ -61,6 +64,23 @@ class Settings(BaseSettings):
     expose_non_ready_model_cards: bool = False
     max_page_size: int = 50
     prediction_staleness_days: int = 90
+
+    @field_validator("copilot_max_question_length")
+    @classmethod
+    def _validate_copilot_max_question_length(cls, value: int) -> int:
+        """A core, always-relevant Copilot parameter (not an optional
+        local-AI setting) -- an invalid value here fails Settings
+        construction loudly and early, rather than letting a nonsensical
+        bound silently reach the API/service/UI. Must stay within the
+        fixed absolute public-safety ceiling; see
+        ``plateproof.copilot.question_validation.ABSOLUTE_MAX_QUESTION_LENGTH``."""
+        if value <= 0:
+            raise ValueError("copilot_max_question_length must be positive")
+        if value > ABSOLUTE_MAX_QUESTION_LENGTH:
+            raise ValueError(
+                f"copilot_max_question_length must not exceed {ABSOLUTE_MAX_QUESTION_LENGTH}"
+            )
+        return value
 
     def resolve_path(self, path: Path) -> Path:
         """Resolve ``path`` against :data:`APP_BASE_DIR` when relative;

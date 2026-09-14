@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 
 from plateproof.api.dependencies import get_app_settings, get_model_metadata, get_repository
 from plateproof.api.schemas import HealthComponent, HealthResponse
+from plateproof.copilot.wiring import local_ai_health_status
 from plateproof.core.config import Settings
 from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import Repository
@@ -41,10 +42,13 @@ def get_health(
     florida_model_status = "ok" if model_metadata.get("florida") is not None else "unavailable"
     google_status = "ok" if settings.google_integration_enabled else "disabled"
     # No live network probe of the local model server happens here -- that
-    # would make this shared health endpoint slow and flaky. "enabled in
-    # configuration" and "actually reachable" are honestly distinguished:
-    # "configured_unverified" means only the former is known.
-    local_ai_status = "configured_unverified" if settings.local_llm_enabled else "disabled"
+    # would make this shared health endpoint slow and flaky.
+    # local_ai_health_status distinguishes "disabled" (not enabled),
+    # "configured_unverified" (enabled, every setting structurally valid,
+    # but not live-probed), and "unavailable" (enabled but misconfigured
+    # -- a helper could not even be constructed) without ever connecting
+    # to Ollama.
+    local_ai_status, _local_ai_detail = local_ai_health_status(settings)
 
     components = [
         HealthComponent(name="datastore", status=snapshot["datastore"]),

@@ -213,3 +213,77 @@ def test_oversized_filters_dict_is_rejected(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert proposal is None
     assert reason is not None
+
+
+# --------------------------------------------------------------------------- #
+# Correction: the complete [0.0, 1.0] confidence contract, not just a lower
+# bound -- and validation that the configured minimum itself is sane.
+# --------------------------------------------------------------------------- #
+
+
+def test_confidence_of_exactly_zero_is_accepted_when_minimum_is_zero() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 0.0}, min_confidence=0.0
+    )
+    assert reason is None
+    assert proposal is not None
+    assert proposal.confidence == 0.0
+
+
+def test_confidence_of_exactly_one_is_accepted() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 1.0}, min_confidence=_MIN_CONFIDENCE
+    )
+    assert reason is None
+    assert proposal is not None
+    assert proposal.confidence == 1.0
+
+
+def test_confidence_slightly_above_one_is_rejected() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 1.0001}, min_confidence=_MIN_CONFIDENCE
+    )
+    assert proposal is None
+    assert reason is not None
+
+
+def test_negative_confidence_is_rejected() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": -0.1}, min_confidence=_MIN_CONFIDENCE
+    )
+    assert proposal is None
+    assert reason is not None
+
+
+def test_very_large_confidence_is_rejected() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 1_000_000.0},
+        min_confidence=_MIN_CONFIDENCE,
+    )
+    assert proposal is None
+    assert reason is not None
+
+
+def test_confidence_exactly_at_zero_is_rejected_by_a_positive_minimum() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 0.0}, min_confidence=_MIN_CONFIDENCE
+    )
+    assert proposal is None
+    assert reason is not None
+
+
+@pytest.mark.parametrize("bad_minimum", [-0.1, 1.1, math.nan, math.inf, -math.inf])
+def test_invalid_configured_minimum_confidence_is_rejected(bad_minimum: float) -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 0.9}, min_confidence=bad_minimum
+    )
+    assert proposal is None
+    assert reason is not None
+
+
+def test_boolean_configured_minimum_is_rejected() -> None:
+    proposal, reason = validate_intent_proposal(
+        {"intent": "recurring_violations", "confidence": 0.9}, min_confidence=True
+    )
+    assert proposal is None
+    assert reason is not None

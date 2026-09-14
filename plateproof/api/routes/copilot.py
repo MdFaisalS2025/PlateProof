@@ -36,7 +36,11 @@ from plateproof.copilot.service import CopilotService
 from plateproof.core.config import Settings
 from plateproof.graph.builder import GraphService
 from plateproof.graph.models import GraphScaleExceededError
-from plateproof.serving.errors import DatastoreUnavailableError, RestaurantNotFoundError
+from plateproof.serving.errors import (
+    DatastoreUnavailableError,
+    InvalidQuestionError,
+    RestaurantNotFoundError,
+)
 from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.prediction_service import resolve_prediction
 from plateproof.serving.repository import Repository
@@ -60,6 +64,14 @@ def copilot_query(
 ) -> CopilotQueryResponse:
     if repository.get_restaurant(payload.restaurant_id) is None:
         raise RestaurantNotFoundError(payload.restaurant_id)
+
+    # The request schema already enforced the fixed absolute ceiling;
+    # this enforces the (possibly tighter) administrator-configured
+    # operational limit as a second, explicit 422 -- never a typed
+    # service-level refusal for a limit the API itself should have
+    # rejected before ever consulting CopilotService.
+    if len(payload.question) > settings.copilot_max_question_length:
+        raise InvalidQuestionError("question exceeds the configured maximum length")
 
     try:
         graph_result = graph_service.get()

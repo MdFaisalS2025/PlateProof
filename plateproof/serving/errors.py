@@ -20,6 +20,13 @@ class InvalidQueryError(ServingError):
     pass
 
 
+class InvalidQuestionError(ServingError):
+    """A Copilot question exceeded the administrator-configured operational
+    limit (``Settings.copilot_max_question_length``) after already passing
+    the fixed absolute public-safety ceiling enforced by the request
+    schema. Never includes the offending question text."""
+
+
 class RestaurantNotFoundError(ServingError):
     def __init__(self, restaurant_id: str) -> None:
         super().__init__(f"restaurant not found: {restaurant_id}")

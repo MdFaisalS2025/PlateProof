@@ -14,6 +14,7 @@ from plateproof.serving.errors import (
     DatastoreUnavailableError,
     InvalidPaginationError,
     InvalidQueryError,
+    InvalidQuestionError,
     ModelCardNotFoundError,
     RestaurantNotFoundError,
 )
@@ -23,6 +24,7 @@ _Handler = Callable[[Request, Exception], Awaitable[JSONResponse]]
 _STATUS_BY_ERROR: dict[type[Exception], int] = {
     InvalidPaginationError: 422,
     InvalidQueryError: 422,
+    InvalidQuestionError: 422,
     RestaurantNotFoundError: 404,
     ModelCardNotFoundError: 404,
     DatastoreUnavailableError: 503,

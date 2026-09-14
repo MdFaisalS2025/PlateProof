@@ -70,6 +70,27 @@ def _validate_filters(
     return validated, None
 
 
+#: The declared model contract: confidence is always in this closed range.
+#: A value outside it is rejected outright, independent of the configured
+#: minimum -- the minimum can only narrow acceptance further, never widen
+#: it beyond this hard boundary.
+MIN_POSSIBLE_CONFIDENCE = 0.0
+MAX_POSSIBLE_CONFIDENCE = 1.0
+
+
+def _is_valid_min_confidence(min_confidence: object) -> bool:
+    """The configured minimum itself must be a real, finite number inside
+    ``[0.0, 1.0]`` -- an administrator-misconfigured threshold (e.g. a
+    typo like ``60`` instead of ``0.6``, or a negative/NaN value) must
+    never silently accept everything or reject everything without a clear
+    reason."""
+    if isinstance(min_confidence, bool) or not isinstance(min_confidence, int | float):
+        return False
+    if not math.isfinite(min_confidence):
+        return False
+    return MIN_POSSIBLE_CONFIDENCE <= min_confidence <= MAX_POSSIBLE_CONFIDENCE
+
+
 def validate_intent_proposal(
     raw: object, *, min_confidence: float
 ) -> tuple[IntentProposal | None, str | None]:
@@ -77,6 +98,9 @@ def validate_intent_proposal(
     rejection. Never raises -- ``raw`` is fully untrusted, already-parsed
     JSON (a plain Python object from ``json.loads``), never re-parsed
     here."""
+    if not _is_valid_min_confidence(min_confidence):
+        return None, "configured minimum confidence is invalid"
+
     if not isinstance(raw, dict):
         return None, "response is not a JSON object"
 
@@ -97,6 +121,8 @@ def validate_intent_proposal(
     if not math.isfinite(raw_confidence):
         return None, "confidence is not a finite number"
     confidence = float(raw_confidence)
+    if not (MIN_POSSIBLE_CONFIDENCE <= confidence <= MAX_POSSIBLE_CONFIDENCE):
+        return None, "confidence is outside the valid 0.0-1.0 range"
     if confidence < min_confidence:
         return None, "confidence is below the minimum required threshold"
 
