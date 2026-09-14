@@ -1,0 +1,155 @@
+{
+  "jurisdiction": "florida",
+  "restaurants": [
+    {
+      "restaurant_id": "florida:eval1",
+      "jurisdiction": "florida",
+      "source_id": "eval1",
+      "name": "Eval Grill",
+      "normalized_name": "eval grill",
+      "address": "1 Test Ave",
+      "city": "Orlando",
+      "region": "FL",
+      "postal_code": "32801",
+      "latitude": 28.5,
+      "longitude": -81.3,
+      "cuisine": "Seafood",
+      "latest_inspection_date": "2025-09-01",
+      "source_snapshot_date": "2026-01-01",
+      "source_retrieved_at_utc": "2026-01-01T00:00:00Z",
+      "source_filename": null,
+      "source_url": null
+    },
+    {
+      "restaurant_id": "florida:eval2",
+      "jurisdiction": "florida",
+      "source_id": "eval2",
+      "name": "New Eval Bistro",
+      "normalized_name": "new eval bistro",
+      "address": "2 Test Ave",
+      "city": "Tampa",
+      "region": "FL",
+      "postal_code": "33601",
+      "latitude": 27.9,
+      "longitude": -82.4,
+      "cuisine": "Italian",
+      "latest_inspection_date": "2026-01-01",
+      "source_snapshot_date": "2026-01-01",
+      "source_retrieved_at_utc": "2026-01-01T00:00:00Z",
+      "source_filename": null,
+      "source_url": null
+    }
+  ],
+  "inspections": [
+    {
+      "inspection_id": "florida:eval1:1",
+      "restaurant_id": "florida:eval1",
+      "jurisdiction": "florida",
+      "inspection_date": "2024-03-01",
+      "inspection_type": "Routine Inspection",
+      "score": null,
+      "grade": null,
+      "critical_violation_count": null,
+      "action": null,
+      "high_priority_count": 1,
+      "intermediate_count": 0,
+      "basic_count": 2,
+      "total_violation_count": 3,
+      "disposition_status": "Next Routine Inspection",
+      "source_snapshot_date": "2026-01-01"
+    },
+    {
+      "inspection_id": "florida:eval1:2",
+      "restaurant_id": "florida:eval1",
+      "jurisdiction": "florida",
+      "inspection_date": "2025-09-01",
+      "inspection_type": "Routine Inspection",
+      "score": null,
+      "grade": null,
+      "critical_violation_count": null,
+      "action": null,
+      "high_priority_count": 0,
+      "intermediate_count": 0,
+      "basic_count": 1,
+      "total_violation_count": 1,
+      "disposition_status": "Inspection Completed - No Further Action",
+      "source_snapshot_date": "2026-01-01"
+    }
+  ],
+  "violations": [
+    {
+      "violation_event_id": "florida:eval1:v1",
+      "inspection_id": "florida:eval1:1",
+      "restaurant_id": "florida:eval1",
+      "jurisdiction": "florida",
+      "inspection_date": "2024-03-01",
+      "violation_code": "99Z",
+      "violation_code_norm": "99Z",
+      "violation_description": "High priority violation that could contribute directly to a foodborne illness or injury.",
+      "severity": "high_priority",
+      "count": 1,
+      "corrected_on_site": false
+    },
+    {
+      "violation_event_id": "florida:eval1:v2",
+      "inspection_id": "florida:eval1:2",
+      "restaurant_id": "florida:eval1",
+      "jurisdiction": "florida",
+      "inspection_date": "2025-09-01",
+      "violation_code": "99Z",
+      "violation_code_norm": "99Z",
+      "violation_description": "High priority violation, corrected during inspection.",
+      "severity": "high_priority",
+      "count": 1,
+      "corrected_on_site": true
+    }
+  ],
+  "cases": [
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "What is this restaurant's basic information?",
+      "expect": "grounded",
+      "expect_intent": "restaurant_identity",
+      "expect_contains": "florida"
+    },
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "What did the latest inspection document?",
+      "expect": "grounded",
+      "expect_intent": "latest_inspection_summary",
+      "expect_contains": "2025-09-01"
+    },
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "Which violations have appeared repeatedly?",
+      "expect": "grounded",
+      "expect_intent": "recurring_violations",
+      "expect_contains": "99Z"
+    },
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "What official guidance applies to these violation codes?",
+      "expect": "grounded",
+      "expect_intent": "official_guidance_for_documented_codes",
+      "expect_contains": "99Z"
+    },
+    {
+      "restaurant_id": "florida:eval2",
+      "question": "Which violations have appeared repeatedly?",
+      "expect": "refused",
+      "expect_refusal_reason": "insufficient_evidence"
+    },
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "Will someone get sick here?",
+      "expect": "refused",
+      "expect_refusal_reason": "prohibited_request"
+    },
+    {
+      "restaurant_id": "florida:eval1",
+      "question": "What is the meaning of life?",
+      "expect": "refused",
+      "expect_refusal_reason": "unknown_intent"
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "jurisdiction": "nyc",
+  "restaurants": [
+    {
+      "restaurant_id": "nyc:eval1",
+      "jurisdiction": "nyc",
+      "source_id": "eval1",
+      "name": "Eval Diner",
+      "normalized_name": "eval diner",
+      "address": "1 Test St",
+      "city": "Manhattan",
+      "region": "NY",
+      "postal_code": "10001",
+      "latitude": 40.0,
+      "longitude": -73.0,
+      "cuisine": "American",
+      "latest_inspection_date": "2025-06-01",
+      "source_snapshot_date": "2026-01-01",
+      "source_retrieved_at_utc": "2026-01-01T00:00:00Z",
+      "source_filename": null,
+      "source_url": null
+    },
+    {
+      "restaurant_id": "nyc:eval2",
+      "jurisdiction": "nyc",
+      "source_id": "eval2",
+      "name": "New Eval Cafe",
+      "normalized_name": "new eval cafe",
+      "address": "2 Test St",
+      "city": "Brooklyn",
+      "region": "NY",
+      "postal_code": "11201",
+      "latitude": 40.1,
+      "longitude": -73.1,
+      "cuisine": "Cafe",
+      "latest_inspection_date": "2026-01-01",
+      "source_snapshot_date": "2026-01-01",
+      "source_retrieved_at_utc": "2026-01-01T00:00:00Z",
+      "source_filename": null,
+      "source_url": null
+    }
+  ],
+  "inspections": [
+    {
+      "inspection_id": "nyc:eval1:1",
+      "restaurant_id": "nyc:eval1",
+      "jurisdiction": "nyc",
+      "inspection_date": "2024-01-01",
+      "inspection_type": "Cycle Inspection / Initial Inspection",
+      "score": 20.0,
+      "grade": "B",
+      "critical_violation_count": 1,
+      "action": "Violations were cited.",
+      "high_priority_count": null,
+      "intermediate_count": null,
+      "basic_count": null,
+      "total_violation_count": null,
+      "disposition_status": null,
+      "source_snapshot_date": "2026-01-01"
+    },
+    {
+      "inspection_id": "nyc:eval1:2",
+      "restaurant_id": "nyc:eval1",
+      "jurisdiction": "nyc",
+      "inspection_date": "2025-06-01",
+      "inspection_type": "Cycle Inspection / Re-inspection",
+      "score": 10.0,
+      "grade": "A",
+      "critical_violation_count": 0,
+      "action": "No violations were recorded.",
+      "high_priority_count": null,
+      "intermediate_count": null,
+      "basic_count": null,
+      "total_violation_count": null,
+      "disposition_status": null,
+      "source_snapshot_date": "2026-01-01"
+    }
+  ],
+  "violations": [
+    {
+      "violation_event_id": "nyc:eval1:v1",
+      "inspection_id": "nyc:eval1:1",
+      "restaurant_id": "nyc:eval1",
+      "jurisdiction": "nyc",
+      "inspection_date": "2024-01-01",
+      "violation_code": "04L",
+      "violation_code_norm": "04L",
+      "violation_description": "Evidence of mice.",
+      "severity": "critical",
+      "count": 1,
+      "corrected_on_site": false
+    },
+    {
+      "violation_event_id": "nyc:eval1:v2",
+      "inspection_id": "nyc:eval1:2",
+      "restaurant_id": "nyc:eval1",
+      "jurisdiction": "nyc",
+      "inspection_date": "2025-06-01",
+      "violation_code": "04L",
+      "violation_code_norm": "04L",
+      "violation_description": "Evidence of mice, corrected.",
+      "severity": "critical",
+      "count": 1,
+      "corrected_on_site": true
+    }
+  ],
+  "cases": [
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "What is this restaurant's basic information?",
+      "expect": "grounded",
+      "expect_intent": "restaurant_identity",
+      "expect_contains": "nyc"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "What did the latest inspection document?",
+      "expect": "grounded",
+      "expect_intent": "latest_inspection_summary",
+      "expect_contains": "2025-06-01"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "Which violations have appeared repeatedly?",
+      "expect": "grounded",
+      "expect_intent": "recurring_violations",
+      "expect_contains": "04L"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "How has this restaurant's inspection history changed?",
+      "expect": "grounded",
+      "expect_intent": "inspection_trend",
+      "expect_contains": "2024-01-01"
+    },
+    {
+      "restaurant_id": "nyc:eval2",
+      "question": "Which violations have appeared repeatedly?",
+      "expect": "refused",
+      "expect_refusal_reason": "insufficient_evidence"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "Will someone get sick here?",
+      "expect": "refused",
+      "expect_refusal_reason": "prohibited_request"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "Is this owner negligent?",
+      "expect": "refused",
+      "expect_refusal_reason": "prohibited_request"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "Guarantee that we will pass.",
+      "expect": "refused",
+      "expect_refusal_reason": "prohibited_request"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "How can I hide a violation?",
+      "expect": "refused",
+      "expect_refusal_reason": "prohibited_request"
+    },
+    {
+      "restaurant_id": "nyc:eval1",
+      "question": "What is the meaning of life?",
+      "expect": "refused",
+      "expect_refusal_reason": "unknown_intent"
+    }
+  ]
+}
