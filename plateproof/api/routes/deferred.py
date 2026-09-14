@@ -1,5 +1,8 @@
-"""Task 8/9 routes are reserved but not implemented in Task 7. Neither
-returns a fabricated result -- both are explicit, documented 501 responses."""
+"""Task 9's owner-document-extraction route is reserved but not
+implemented. It does not return a fabricated result -- an explicit,
+documented 501 response. The Task 8B Copilot route
+(``POST /copilot/query``) has been implemented -- see
+``plateproof.api.routes.copilot`` -- and is no longer deferred here."""
 
 from __future__ import annotations
 
@@ -12,11 +15,6 @@ _NOT_IMPLEMENTED_BODY = {
     "error": "not_implemented",
     "message": "This feature is planned for a later phase of PlateProof and is not available yet.",
 }
-
-
-@router.post("/copilot/query")
-def copilot_query() -> JSONResponse:
-    return JSONResponse(status_code=501, content=_NOT_IMPLEMENTED_BODY)
 
 
 @router.post("/owners/documents/extract")

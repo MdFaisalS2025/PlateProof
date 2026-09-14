@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     local_llm_enabled: bool = False
     local_llm_base_url: str = "http://localhost:11434"
     local_llm_model: str | None = None
+    # --- Task 8B: optional local intent assistance + Copilot API/UI ---- #
+    local_llm_connect_timeout_seconds: float = 2.0
+    local_llm_read_timeout_seconds: float = 5.0
+    local_llm_max_response_bytes: int = 65_536
+    local_llm_min_confidence: float = 0.6
+    copilot_max_question_length: int = 500
+    guidance_corpus_manifest_path: Path | None = Path("data/reference/guidance/manifest.json")
 
     # --- Task 7: API/UI serving --------------------------------------- #
     processed_data_dir: Path = Path("data/processed")

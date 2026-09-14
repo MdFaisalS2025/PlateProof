@@ -10,7 +10,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from plateproof.copilot.question_validation import sanitize_question
 
 Jurisdiction = Literal["nyc", "florida"]
 RiskBand = Literal["low", "moderate", "high", "insufficient_history"]
@@ -37,7 +39,10 @@ class HealthComponent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    status: Literal["ok", "unavailable", "disabled", "empty"]
+    # "configured_unverified": the component is enabled in configuration,
+    # but /health performs no live network probe of it (see the "local_ai"
+    # component) -- truthfully distinct from "ok" (verified working).
+    status: Literal["ok", "unavailable", "disabled", "empty", "configured_unverified"]
     detail: str | None = None
 
 
@@ -179,3 +184,92 @@ class ApiError(BaseModel):
 
     error: str
     message: str
+
+
+# --------------------------------------------------------------------------- #
+# Task 8B: Copilot API contract.                                              #
+# --------------------------------------------------------------------------- #
+
+# Matches plateproof.core.config.Settings.copilot_max_question_length's
+# default. A Pydantic field_validator runs at parse time, before any
+# Settings instance is available, so this bound is intentionally static --
+# CopilotService re-validates with the actually-configured value as the
+# authoritative check regardless (see plateproof.api.routes.copilot).
+_REQUEST_MAX_QUESTION_LENGTH = 500
+
+
+class CopilotQueryRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    restaurant_id: str = Field(min_length=1, max_length=128)
+    question: str
+
+    @field_validator("question")
+    @classmethod
+    def _validate_question(cls, value: str) -> str:
+        sanitized, reason = sanitize_question(value, max_length=_REQUEST_MAX_QUESTION_LENGTH)
+        if sanitized is None:
+            assert reason is not None
+            raise ValueError(reason)
+        return sanitized
+
+
+class PublicClaim(BaseModel):
+    """A safe, stable public projection of a Claim -- never the internal
+    ``values`` mapping. ``text`` is produced by the same deterministic
+    renderer (``plateproof.copilot.rendering.render_claim``) that builds
+    the full answer_text, so it is never a second, independently-written
+    description of the same fact."""
+
+    model_config = ConfigDict(frozen=True)
+
+    claim_type: str
+    jurisdiction: str
+    as_of_date: date
+    text: str
+    evidence_ids: tuple[str, ...]
+    provenance_category: str
+
+
+class PublicCitation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    citation_id: str
+    evidence_category: str
+    title: str
+    url: str | None
+    excerpt: str
+    jurisdiction: str
+    as_of_date: date | None
+    superseded: bool
+    issuing_authority: str | None = None
+    section_locator: str | None = None
+    access_date: date | None = None
+    effective_date: date | None = None
+    revision_date: date | None = None
+
+
+class PublicRefusal(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reason: str
+    detail: str
+    supported_intents_hint: tuple[str, ...] = ()
+
+
+class CopilotQueryResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    restaurant_id: str
+    jurisdiction: Jurisdiction | None
+    intent: str | None
+    grounding_status: Literal["grounded", "refused"]
+    answer_text: str
+    claims: list[PublicClaim]
+    citations: list[PublicCitation]
+    refusal: PublicRefusal | None
+    generator_mode: Literal["deterministic", "local_llm_assisted"]
+    local_helper_status: str
+    warnings: list[str]
+    generated_at: datetime
+    disclaimer: str

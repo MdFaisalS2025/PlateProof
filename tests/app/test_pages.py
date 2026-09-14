@@ -85,12 +85,7 @@ def test_model_card_page_smoke_no_model_configured(app_env: Any, app_path: Any) 
     assert any("No ready PlateProof model" in w.value for w in at.warning)
 
 
-def test_owner_copilot_page_is_clearly_deferred(app_env: Any, app_path: Any) -> None:
-    from streamlit.testing.v1 import AppTest
-
-    at = AppTest.from_file(app_path("pages", "3_Owner_Copilot.py"))
-    at.run(timeout=30)
-    assert not at.exception
-    combined = "\n".join(i.value for i in at.info)
-    assert "coming in a later phase" in combined.lower()
-    assert "chat" in combined.lower()
+# The Owner Copilot page's real Task 8B behavior (restaurant lookup,
+# example/free-text questions, grounded/refused answers, disclaimers,
+# citations, local-AI status) is covered by
+# tests/app/test_owner_copilot_page.py.

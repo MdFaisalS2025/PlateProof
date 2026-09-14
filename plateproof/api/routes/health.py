@@ -40,6 +40,11 @@ def get_health(
     nyc_model_status = "ok" if model_metadata.get("nyc") is not None else "unavailable"
     florida_model_status = "ok" if model_metadata.get("florida") is not None else "unavailable"
     google_status = "ok" if settings.google_integration_enabled else "disabled"
+    # No live network probe of the local model server happens here -- that
+    # would make this shared health endpoint slow and flaky. "enabled in
+    # configuration" and "actually reachable" are honestly distinguished:
+    # "configured_unverified" means only the former is known.
+    local_ai_status = "configured_unverified" if settings.local_llm_enabled else "disabled"
 
     components = [
         HealthComponent(name="datastore", status=snapshot["datastore"]),
@@ -49,6 +54,7 @@ def get_health(
         HealthComponent(name="nyc_model", status=nyc_model_status),
         HealthComponent(name="florida_model", status=florida_model_status),
         HealthComponent(name="google", status=google_status),
+        HealthComponent(name="local_ai", status=local_ai_status),
     ]
 
     if snapshot["datastore"] == "unavailable":

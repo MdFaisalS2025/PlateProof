@@ -113,11 +113,62 @@ Configure local paths via `PLATEPROOF_`-prefixed environment variables (see
 and UI run correctly with none configured, showing clear "unavailable"
 states instead of failing.
 
+## PlateProof Copilot
+
+The Copilot (`POST /copilot/query`, and the "Owner Copilot" Streamlit page)
+answers restaurant-scoped questions about documented inspection history and
+reviewed official guidance. It is deterministic by design: **every factual
+sentence in an answer is built by a fixed claim builder and a fixed
+rendering template from authorized evidence (the knowledge graph and the
+reviewed guidance corpus) -- never freely generated text.** Nothing in
+PlateProof ever asks a local or remote model to write the answer itself.
+
+Supported questions map to one of 9 closed intents: latest inspection
+summary, recurring violations, full violation history, inspection trend,
+official guidance for documented codes, a preparation checklist from
+official guidance, forecast explanation, restaurant identity, and Michelin
+context. A question outside this set is honestly refused, never guessed.
+
+**Optional local intent assistance.** When a free-text question is
+ambiguous or unrecognized, PlateProof can optionally ask a local Ollama
+server (disabled by default) to propose *which one of the 9 closed
+intents* the question maps to -- and nothing more. That proposal is
+strictly validated (closed enum membership, a minimum confidence, no
+unexpected fields) before it is ever trusted; on any rejection, timeout, or
+connection failure, PlateProof falls back to its normal deterministic
+refusal. The same deterministic evidence pipeline answers the question
+either way -- only the response's `generator_mode`/`local_helper_status`
+metadata differ. This costs no API fee: it runs entirely on your own
+machine via [Ollama](https://ollama.com), and disabling it does not remove
+any core Copilot functionality. To try it, install Ollama yourself, pull a
+small instruction-following model of your choice, and set
+`PLATEPROOF_LOCAL_LLM_ENABLED=true` and `PLATEPROOF_LOCAL_LLM_MODEL` in your
+`.env` -- PlateProof never installs Ollama or downloads a model for you.
+The local server may only be reached at `http://localhost:<port>` or
+`http://127.0.0.1:<port>`; see `plateproof/copilot/generators/ollama.py` for
+the full network-boundary hardening.
+
+**Official guidance corpus.** Guidance citations come from a small,
+manually reviewed snapshot of official government text under
+`data/reference/guidance/`, checksum-verified on load
+(`plateproof/copilot/corpus.py`). Run `python -m scripts.review_guidance_corpus`
+to audit it. If the corpus can't be loaded (not configured, or fails
+validation), guidance-dependent questions honestly report that PlateProof
+doesn't currently have mapped guidance -- never that no such guidance
+exists anywhere, and never a fabricated answer.
+
+**Limitations.** PlateProof does not verify restaurant ownership. A
+forecast is a statistical estimate, never a guarantee or a prediction of a
+specific violation. Michelin recognition is contextual culinary
+information and never implies food safety. Refusal is the default for
+anything PlateProof cannot ground in documented evidence.
+
 ## Status
 
 Task 1 (project foundation), Task 2 (NYC ingestion), Task 3 (Florida
 ingestion), Task 4 (optional Michelin ingestion and auditable entity
 resolution), Task 5 (leakage-safe temporal features), Task 6 (calibrated
-jurisdiction risk models), and Task 7 (FastAPI service and Streamlit MVP)
-are implemented. Task 8 (Copilot) and Task 9 (owner document extraction)
-are reserved but not implemented -- their routes return an explicit `501`.
+jurisdiction risk models), Task 7 (FastAPI service and Streamlit MVP), and
+Task 8 (deterministic, evidence-grounded Copilot with optional local
+intent assistance) are implemented. Task 9 (owner document extraction) is
+reserved but not implemented -- its route returns an explicit `501`.

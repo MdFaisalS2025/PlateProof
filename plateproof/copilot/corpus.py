@@ -173,6 +173,9 @@ class CorpusPassage:
     topics: tuple[str, ...]
     permitted_uses: tuple[PermittedUse, ...]
     superseded: bool
+    access_date: date
+    effective_date: date | None
+    revision_date: date | None
 
 
 class CorpusStore:
@@ -408,6 +411,9 @@ def load_corpus(manifest_path: Path | None) -> CorpusLoadResult:
                     topics=passage.topics,
                     permitted_uses=passage.permitted_uses,
                     superseded=entry.superseded,
+                    access_date=entry.access_date,
+                    effective_date=entry.effective_date,
+                    revision_date=entry.revision_date,
                 )
             )
 

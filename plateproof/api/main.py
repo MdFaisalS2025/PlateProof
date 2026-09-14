@@ -16,8 +16,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from plateproof.api.errors import register_exception_handlers
-from plateproof.api.routes import deferred, health, models, predictions, restaurants
+from plateproof.api.routes import copilot, deferred, health, models, predictions, restaurants
+from plateproof.copilot.wiring import build_corpus_store, build_intent_helper
 from plateproof.core.config import Settings, get_settings
+from plateproof.graph.builder import GraphService
 from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import open_repository
 
@@ -32,11 +34,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved_settings
     app.state.repository = open_repository(resolved_settings)
     app.state.model_metadata = ModelMetadataReader(resolved_settings)
+    # GraphService construction is cheap (no I/O) -- the actual graph build
+    # happens lazily on first request and is then cached by source
+    # fingerprint (see plateproof.graph.builder.GraphService), never
+    # rebuilt on every request. The corpus and the optional intent helper
+    # are each built exactly once here, at app-construction time.
+    app.state.graph_service = GraphService(
+        resolved_settings.resolve_path(resolved_settings.processed_data_dir)
+    )
+    app.state.corpus_store = build_corpus_store(resolved_settings)
+    app.state.intent_helper = build_intent_helper(resolved_settings)
 
     app.include_router(health.router)
     app.include_router(restaurants.router)
     app.include_router(predictions.router)
     app.include_router(models.router)
+    app.include_router(copilot.router)
     app.include_router(deferred.router)
 
     register_exception_handlers(app)

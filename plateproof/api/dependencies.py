@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from plateproof.copilot.corpus import CorpusStore
+from plateproof.copilot.generators.base import IntentHelper
 from plateproof.core.config import Settings
+from plateproof.graph.builder import GraphService
 from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import Repository
 
@@ -26,3 +29,18 @@ def get_repository(request: Request) -> Repository:
 def get_model_metadata(request: Request) -> ModelMetadataReader:
     model_metadata: ModelMetadataReader = request.app.state.model_metadata
     return model_metadata
+
+
+def get_graph_service(request: Request) -> GraphService:
+    graph_service: GraphService = request.app.state.graph_service
+    return graph_service
+
+
+def get_corpus_store(request: Request) -> CorpusStore | None:
+    corpus_store: CorpusStore | None = request.app.state.corpus_store
+    return corpus_store
+
+
+def get_intent_helper(request: Request) -> IntentHelper | None:
+    intent_helper: IntentHelper | None = request.app.state.intent_helper
+    return intent_helper

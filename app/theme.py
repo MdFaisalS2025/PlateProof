@@ -10,9 +10,15 @@ from typing import Any
 
 import streamlit as st
 
+from plateproof.copilot.corpus import CorpusStore
+from plateproof.copilot.generators.base import IntentHelper
+from plateproof.copilot.service import CopilotService
+from plateproof.copilot.wiring import build_corpus_store, build_intent_helper
 from plateproof.core.config import Settings, get_settings
+from plateproof.graph.builder import GraphService
 from plateproof.serving.display import INDEPENDENCE_STATEMENT
 from plateproof.serving.model_registry_service import ModelMetadataReader
+from plateproof.serving.prediction_service import resolve_prediction
 from plateproof.serving.repository import Repository, open_repository
 
 PAGE_TITLE = "PlateProof"
@@ -115,6 +121,80 @@ def _cache_key(settings: Settings) -> str:
             settings.florida_model_artifact_path,
             settings.prediction_table_path,
         )
+    )
+
+
+# Task 8B: graph/corpus/local-helper accessors, each built once per
+# settings and cached for the life of this process -- never rebuilt on
+# every script rerun. GraphService itself is cheap to construct (no I/O);
+# the actual graph build is lazy (on first .get()) and then cached by
+# source fingerprint, exactly like plateproof.api.main's wiring.
+_graph_service_cache: dict[str, GraphService] = {}
+_corpus_store_cache: dict[str, CorpusStore | None] = {}
+_intent_helper_cache: dict[str, IntentHelper | None] = {}
+
+
+def _copilot_cache_key(settings: Settings) -> str:
+    return "|".join(
+        str(v)
+        for v in (
+            settings.processed_data_dir,
+            settings.guidance_corpus_manifest_path,
+            settings.local_llm_enabled,
+            settings.local_llm_base_url,
+            settings.local_llm_model,
+        )
+    )
+
+
+def graph_service() -> GraphService:
+    settings = get_settings()
+    key = _copilot_cache_key(settings)
+    if key not in _graph_service_cache:
+        _graph_service_cache[key] = GraphService(settings.resolve_path(settings.processed_data_dir))
+    return _graph_service_cache[key]
+
+
+def corpus_store() -> CorpusStore | None:
+    settings = get_settings()
+    key = _copilot_cache_key(settings)
+    if key not in _corpus_store_cache:
+        _corpus_store_cache[key] = build_corpus_store(settings)
+    return _corpus_store_cache[key]
+
+
+def intent_helper() -> IntentHelper | None:
+    settings = get_settings()
+    key = _copilot_cache_key(settings)
+    if key not in _intent_helper_cache:
+        _intent_helper_cache[key] = build_intent_helper(settings)
+    return _intent_helper_cache[key]
+
+
+def copilot_service() -> CopilotService:
+    """A fresh, cheap ``CopilotService`` wrapper per call -- the expensive
+    pieces it wraps (graph, corpus, intent helper) are each cached above,
+    never rebuilt per call."""
+    settings = get_settings()
+    repo = repository()
+    meta = model_metadata()
+
+    def _forecast_lookup(restaurant_id: str, jurisdiction: str) -> Any:
+        availability = resolve_prediction(
+            repo,
+            meta,
+            restaurant_id=restaurant_id,
+            jurisdiction=jurisdiction,
+            staleness_days=settings.prediction_staleness_days,
+        )
+        return availability.row if availability.status == "available" else None
+
+    return CopilotService(
+        graph_service().get().graph,
+        corpus_store(),
+        forecast_lookup=_forecast_lookup,
+        intent_helper=intent_helper(),
+        max_question_length=settings.copilot_max_question_length,
     )
 
 

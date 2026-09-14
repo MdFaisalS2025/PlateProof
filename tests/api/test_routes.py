@@ -606,10 +606,10 @@ def test_model_card_never_exposes_artifact_path(
 # Deferred routes / errors                                                     #
 # --------------------------------------------------------------------------- #
 
-
-def test_copilot_query_returns_501(client: Any) -> None:
-    response = client.post("/copilot/query", json={})
-    assert response.status_code == 501
+# Task 8B implements POST /copilot/query for real -- see
+# tests/api/test_copilot_route.py for its behavior. It is no longer a
+# deferred 501 (test_owner_document_extract_returns_501 below still covers
+# the one route that remains deferred for Task 9).
 
 
 def test_owner_document_extract_returns_501(client: Any) -> None:

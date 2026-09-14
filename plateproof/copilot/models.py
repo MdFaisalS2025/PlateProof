@@ -104,6 +104,15 @@ _ALWAYS_ANSWERABLE_INTENTS = frozenset({Intent.RESTAURANT_IDENTITY})
 
 @dataclass(frozen=True)
 class Citation:
+    """``issuing_authority``/``section_locator``/``access_date``/
+    ``effective_date``/``revision_date`` are populated only for a
+    guidance-passage citation (see
+    ``plateproof.copilot.retrieval._passage_citation``) -- a
+    restaurant-record or model-forecast citation always leaves them
+    ``None``. This is the structural signal that distinguishes PlateProof's
+    own synthesized record summary from a verbatim, reviewed government
+    excerpt; never present one as the other."""
+
     citation_id: str
     evidence_type: EvidenceType
     title: str
@@ -112,6 +121,11 @@ class Citation:
     jurisdiction: Jurisdiction
     as_of_date: date | None
     superseded: bool = False
+    issuing_authority: str | None = None
+    section_locator: str | None = None
+    access_date: date | None = None
+    effective_date: date | None = None
+    revision_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +178,7 @@ class RefusalReason(StrEnum):
     AMBIGUOUS_INTENT = "ambiguous_intent"
     UNKNOWN_INTENT = "unknown_intent"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    INVALID_QUESTION = "invalid_question"
 
 
 @dataclass(frozen=True)
@@ -183,7 +198,7 @@ class CopilotAnswer:
     answer_text: str
     claims: tuple[Claim, ...]
     citations: tuple[Citation, ...]
-    generator_mode: str  # "deterministic" | "local_llm_assisted" (Task 8B)
+    generator_mode: str  # "deterministic" | "local_llm_assisted"
     grounding_status: str  # "grounded" | "refused"
     refusal: Refusal | None
     warnings: tuple[str, ...]
@@ -192,3 +207,11 @@ class CopilotAnswer:
         "PlateProof does not verify restaurant ownership. This reflects "
         "documented public records and official guidance only."
     )
+    # "not_consulted" (deterministic match or a prohibited request -- the
+    # helper is never invoked even if enabled) | "disabled" (ambiguous/
+    # unknown question, no helper configured) | "accepted" (helper's
+    # proposal passed strict validation and was used) | "rejected" (helper
+    # responded but its proposal failed validation) | "unavailable"
+    # (network/timeout/transport failure prevented getting a response at
+    # all). See plateproof.copilot.service.CopilotService.answer.
+    local_helper_status: str = "not_consulted"

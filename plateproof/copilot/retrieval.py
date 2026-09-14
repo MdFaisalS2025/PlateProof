@@ -40,8 +40,17 @@ def _passage_citation(passage: CorpusPassage) -> Citation:
         url=passage.source_url,
         excerpt=passage.text,
         jurisdiction=passage.jurisdiction,
-        as_of_date=None,
+        # The corpus is a static, human-reviewed snapshot -- its own
+        # access_date is the most accurate "as of" signal available for a
+        # guidance-passage citation (there is no dynamic score/record date
+        # the way there is for a restaurant-record citation).
+        as_of_date=passage.access_date,
         superseded=passage.superseded,
+        issuing_authority=passage.authority,
+        section_locator=passage.section_locator,
+        access_date=passage.access_date,
+        effective_date=passage.effective_date,
+        revision_date=passage.revision_date,
     )
 
 

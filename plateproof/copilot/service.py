@@ -18,12 +18,14 @@ hook without changing this module's own answer-construction logic.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 
 from plateproof.copilot import claims as claims_module
 from plateproof.copilot import facts, retrieval
 from plateproof.copilot.corpus import CorpusStore, PermittedUse
+from plateproof.copilot.generators.base import IntentHelper, IntentHelperOutcome
 from plateproof.copilot.intents import IntentDetectionOutcome, detect_intent
 from plateproof.copilot.models import (
     Citation,
@@ -37,10 +39,13 @@ from plateproof.copilot.models import (
     RetrievedEvidenceItem,
     parse_restaurant_jurisdiction,
 )
+from plateproof.copilot.question_validation import sanitize_question
 from plateproof.graph import queries
 from plateproof.graph.store import PlateProofGraph
 
 ForecastLookup = Callable[[str, str], Mapping[str, object] | None]
+
+_DEFAULT_MAX_QUESTION_LENGTH = 500
 
 _PROHIBITED_DETAIL = (
     "PlateProof cannot answer requests about future health outcomes, legal "
@@ -55,6 +60,7 @@ _UNKNOWN_DETAIL = (
 )
 _NO_RESTAURANT_DETAIL = "This restaurant is not documented in PlateProof."
 _INSUFFICIENT_EVIDENCE_DETAIL = "There isn't enough documented history to answer this question yet."
+_INVALID_QUESTION_DETAIL = "This question could not be processed. Please rephrase and try again."
 
 
 class CopilotService:
@@ -64,10 +70,14 @@ class CopilotService:
         corpus_store: CorpusStore | None = None,
         *,
         forecast_lookup: ForecastLookup | None = None,
+        intent_helper: IntentHelper | None = None,
+        max_question_length: int = _DEFAULT_MAX_QUESTION_LENGTH,
     ) -> None:
         self._graph = graph
         self._corpus = corpus_store
         self._forecast_lookup = forecast_lookup
+        self._intent_helper = intent_helper
+        self._max_question_length = max_question_length
 
     def _resolve_jurisdiction(self, restaurant_id: str) -> RestaurantJurisdiction | None:
         """The single point every code path uses to learn a restaurant's
@@ -81,6 +91,16 @@ class CopilotService:
         return parse_restaurant_jurisdiction(restaurant.get("jurisdiction"))
 
     def answer(self, *, restaurant_id: str, question: str) -> CopilotAnswer:
+        """Recommended flow (Task 8B): sanitize the question -> the
+        prohibited-request check (never bypassable by any helper) ->
+        deterministic intent detection -> if it resolves one intent
+        unambiguously, use it directly, without ever consulting the
+        optional local helper -> only for an ambiguous/unknown result,
+        and only if a helper is configured, ask it to propose a closed
+        intent -> on acceptance, call the *same* :meth:`answer_for_intent`
+        used everywhere else and only override generator-mode metadata ->
+        on any rejection/unavailability, fall back to the original
+        deterministic refusal, exactly as if no helper were configured."""
         now = datetime.now(UTC)
         jurisdiction = self._resolve_jurisdiction(restaurant_id)
         if jurisdiction is None:
@@ -93,7 +113,21 @@ class CopilotService:
                 now,
             )
 
-        detection = detect_intent(question)
+        sanitized_question, invalid_reason = sanitize_question(
+            question, max_length=self._max_question_length
+        )
+        if sanitized_question is None:
+            assert invalid_reason is not None
+            return self._refuse(
+                restaurant_id,
+                jurisdiction,
+                None,
+                RefusalReason.INVALID_QUESTION,
+                _INVALID_QUESTION_DETAIL,
+                now,
+            )
+
+        detection = detect_intent(sanitized_question)
         if detection.outcome == IntentDetectionOutcome.PROHIBITED:
             return self._refuse(
                 restaurant_id,
@@ -103,6 +137,36 @@ class CopilotService:
                 _PROHIBITED_DETAIL,
                 now,
             )
+        if detection.outcome == IntentDetectionOutcome.MATCHED:
+            assert detection.intent is not None
+            return self.answer_for_intent(
+                restaurant_id=restaurant_id, intent=detection.intent, now=now
+            )
+
+        # AMBIGUOUS or UNKNOWN: the deterministic detector could not
+        # resolve one intent by itself.
+        if self._intent_helper is not None:
+            helper_result = self._intent_helper.propose(
+                question=sanitized_question, jurisdiction=jurisdiction, now=now
+            )
+            if helper_result.outcome == IntentHelperOutcome.ACCEPTED:
+                assert helper_result.proposal is not None
+                base_answer = self.answer_for_intent(
+                    restaurant_id=restaurant_id, intent=helper_result.proposal.intent, now=now
+                )
+                return dataclasses.replace(
+                    base_answer,
+                    generator_mode="local_llm_assisted",
+                    local_helper_status="accepted",
+                )
+            local_helper_status = (
+                "rejected"
+                if helper_result.outcome == IntentHelperOutcome.REJECTED
+                else "unavailable"
+            )
+        else:
+            local_helper_status = "disabled"
+
         if detection.outcome == IntentDetectionOutcome.AMBIGUOUS:
             return self._refuse(
                 restaurant_id,
@@ -112,20 +176,18 @@ class CopilotService:
                 _AMBIGUOUS_DETAIL,
                 now,
                 hint=detection.candidates,
+                local_helper_status=local_helper_status,
             )
-        if detection.outcome == IntentDetectionOutcome.UNKNOWN:
-            return self._refuse(
-                restaurant_id,
-                jurisdiction,
-                None,
-                RefusalReason.UNKNOWN_INTENT,
-                _UNKNOWN_DETAIL,
-                now,
-                hint=tuple(Intent),
-            )
-
-        assert detection.intent is not None
-        return self.answer_for_intent(restaurant_id=restaurant_id, intent=detection.intent, now=now)
+        return self._refuse(
+            restaurant_id,
+            jurisdiction,
+            None,
+            RefusalReason.UNKNOWN_INTENT,
+            _UNKNOWN_DETAIL,
+            now,
+            hint=tuple(Intent),
+            local_helper_status=local_helper_status,
+        )
 
     def answer_for_intent(
         self, *, restaurant_id: str, intent: Intent, now: datetime | None = None
@@ -362,6 +424,7 @@ class CopilotService:
         now: datetime,
         *,
         hint: tuple[Intent, ...] = (),
+        local_helper_status: str = "not_consulted",
     ) -> CopilotAnswer:
         return CopilotAnswer(
             restaurant_id=restaurant_id,
@@ -375,4 +438,5 @@ class CopilotService:
             refusal=Refusal(reason=reason, detail=detail, supported_intents_hint=hint),
             warnings=(),
             generated_at=now,
+            local_helper_status=local_helper_status,
         )
