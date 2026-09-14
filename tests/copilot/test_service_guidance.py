@@ -3,6 +3,14 @@
 against the REAL committed starter corpus -- proving cross-jurisdiction
 isolation and honest "guidance unavailable" behavior at the full service
 level, not just inside retrieval.py in isolation.
+
+The real corpus has no exact violation-code mappings and no
+preparation_action-tagged passages (see data/reference/guidance/README.md)
+-- only topic-level definitions. These tests reflect that: they prove
+GUIDANCE_FOR_TOPIC (never GUIDANCE_FOR_CODE) for a severity-matched
+Florida violation, strict jurisdiction isolation, and an honest
+GUIDANCE_UNAVAILABLE for the preparation checklist (since no reviewed
+passage is curated as an actionable step).
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ _GUIDANCE_MANIFEST = (
 def _graph_for(
     restaurant_id: str,
     jurisdiction: str,
-    violation_description: str,
+    severity: str,
     restaurant_row: Any,
     inspection_row: Any,
     violation_row: Any,
@@ -56,7 +64,7 @@ def _graph_for(
                 jurisdiction=jurisdiction,
                 violation_code="99Z",
                 violation_code_norm="99Z",
-                violation_description=violation_description,
+                severity=severity,
             )
         ]
     )
@@ -73,16 +81,11 @@ def _graph_for(
     return result.graph
 
 
-def test_florida_restaurant_retrieves_only_florida_guidance(
+def test_florida_restaurant_gets_topic_guidance_never_code_guidance(
     restaurant_row: Any, inspection_row: Any, violation_row: Any
 ) -> None:
     graph = _graph_for(
-        "florida:1",
-        "florida",
-        "High priority violation that could contribute directly to a foodborne illness or injury.",
-        restaurant_row,
-        inspection_row,
-        violation_row,
+        "florida:1", "florida", "high_priority", restaurant_row, inspection_row, violation_row
     )
     corpus_result = load_corpus(_GUIDANCE_MANIFEST)
     assert corpus_result.store is not None
@@ -93,26 +96,24 @@ def test_florida_restaurant_retrieves_only_florida_guidance(
         question="What official guidance applies to these violation codes?",
     )
     assert answer.grounding_status == "grounded"
-    guidance_claims = [c for c in answer.claims if c.claim_type == ClaimType.GUIDANCE_FOR_CODE]
-    assert guidance_claims, answer.answer_text
+    claim_types = {c.claim_type for c in answer.claims}
+    assert ClaimType.GUIDANCE_FOR_TOPIC in claim_types
+    assert ClaimType.GUIDANCE_FOR_CODE not in claim_types
     for citation in answer.citations:
         if citation.evidence_type.value == "guidance_passage":
             assert citation.jurisdiction == "florida"
 
 
-def test_nyc_restaurant_never_retrieves_florida_guidance(
+def test_nyc_restaurant_never_retrieves_florida_topic_guidance(
     restaurant_row: Any, inspection_row: Any, violation_row: Any
 ) -> None:
-    """The same description text that matches the Florida violation-
-    classification passage must never surface for an NYC restaurant --
-    jurisdiction filtering happens before ranking, not after."""
+    """The Florida corpus has a passage tagged topic "high_priority" -- an
+    NYC restaurant with the same severity classification must never
+    receive it. NYC's own corpus document has no such topic, so this must
+    resolve to an honest guidance-unavailable claim, never a cross-
+    jurisdiction leak."""
     graph = _graph_for(
-        "nyc:1",
-        "nyc",
-        "High priority violation that could contribute directly to a foodborne illness or injury.",
-        restaurant_row,
-        inspection_row,
-        violation_row,
+        "nyc:1", "nyc", "high_priority", restaurant_row, inspection_row, violation_row
     )
     corpus_result = load_corpus(_GUIDANCE_MANIFEST)
     assert corpus_result.store is not None
@@ -122,22 +123,16 @@ def test_nyc_restaurant_never_retrieves_florida_guidance(
         restaurant_id="nyc:1", question="What official guidance applies to these violation codes?"
     )
     assert answer.grounding_status == "grounded"
+    claim_types = {c.claim_type for c in answer.claims}
+    assert claim_types == {ClaimType.GUIDANCE_UNAVAILABLE}
     for citation in answer.citations:
-        if citation.evidence_type.value == "guidance_passage":
-            assert citation.jurisdiction == "nyc"
+        assert citation.jurisdiction != "florida"
 
 
-def test_guidance_unavailable_when_no_topical_match(
+def test_guidance_unavailable_when_severity_has_no_topical_match(
     restaurant_row: Any, inspection_row: Any, violation_row: Any
 ) -> None:
-    graph = _graph_for(
-        "nyc:1",
-        "nyc",
-        "Completely unrelated documented condition with no guidance overlap.",
-        restaurant_row,
-        inspection_row,
-        violation_row,
-    )
+    graph = _graph_for("nyc:1", "nyc", "critical", restaurant_row, inspection_row, violation_row)
     corpus_result = load_corpus(_GUIDANCE_MANIFEST)
     assert corpus_result.store is not None
     service = CopilotService(graph, corpus_result.store)
@@ -146,21 +141,19 @@ def test_guidance_unavailable_when_no_topical_match(
     )
     assert answer.grounding_status == "grounded"
     claim_types = {c.claim_type for c in answer.claims}
-    assert (
-        ClaimType.GUIDANCE_UNAVAILABLE in claim_types or ClaimType.GUIDANCE_FOR_CODE in claim_types
-    )
+    assert claim_types == {ClaimType.GUIDANCE_UNAVAILABLE}
 
 
-def test_preparation_checklist_combines_violation_and_guidance_claims(
+def test_preparation_checklist_reports_guidance_unavailable_for_definition_only_corpus(
     restaurant_row: Any, inspection_row: Any, violation_row: Any
 ) -> None:
+    """The real corpus's Florida passages are curated for `definition`
+    only, never `preparation_action` -- so a preparation checklist must
+    still document the recurring violation, but its guidance portion must
+    be an honest guidance-unavailable claim, never the topic definition
+    repurposed as a checklist step."""
     graph = _graph_for(
-        "florida:1",
-        "florida",
-        "High priority violation that could contribute directly to a foodborne illness or injury.",
-        restaurant_row,
-        inspection_row,
-        violation_row,
+        "florida:1", "florida", "high_priority", restaurant_row, inspection_row, violation_row
     )
     corpus_result = load_corpus(_GUIDANCE_MANIFEST)
     assert corpus_result.store is not None
@@ -171,22 +164,15 @@ def test_preparation_checklist_combines_violation_and_guidance_claims(
     assert answer.grounding_status == "grounded"
     claim_types = {c.claim_type for c in answer.claims}
     assert ClaimType.RECURRING_VIOLATION in claim_types
-    assert (
-        ClaimType.GUIDANCE_FOR_CODE in claim_types or ClaimType.GUIDANCE_UNAVAILABLE in claim_types
-    )
+    assert ClaimType.GUIDANCE_UNAVAILABLE in claim_types
+    assert ClaimType.GUIDANCE_FOR_TOPIC not in claim_types
+    assert ClaimType.GUIDANCE_FOR_CODE not in claim_types
 
 
 def test_guidance_intent_without_configured_corpus_reports_unavailable(
     restaurant_row: Any, inspection_row: Any, violation_row: Any
 ) -> None:
-    graph = _graph_for(
-        "nyc:1",
-        "nyc",
-        "Some documented violation description.",
-        restaurant_row,
-        inspection_row,
-        violation_row,
-    )
+    graph = _graph_for("nyc:1", "nyc", "critical", restaurant_row, inspection_row, violation_row)
     service = CopilotService(graph, corpus_store=None)
     answer = service.answer(
         restaurant_id="nyc:1", question="What official guidance applies to these violation codes?"

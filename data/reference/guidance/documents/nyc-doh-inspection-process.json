@@ -8,7 +8,8 @@
       "text": "Every restaurant in New York City is scheduled for an unannounced inspection at least once a year. During the inspection, an inspector checks for compliance with city and state food safety regulations and marks points for any condition that violates these rules.",
       "sha256": "576e5feb8befb04218d5beec5577649e9c1c12244f16f26daebf94229fc13879",
       "applicable_violation_codes": [],
-      "topics": ["inspection_process_overview"]
+      "topics": ["inspection_process_overview"],
+      "permitted_uses": ["inspection_process"]
     }
   ]
 }

@@ -290,3 +290,87 @@ def test_explain_prediction_with_lookup_is_grounded_and_non_certain(
     assert answer.grounding_status == "grounded"
     assert "not a guarantee" in answer.answer_text
     assert answer.citations[0].evidence_type.value == "model_forecast"
+
+
+# --------------------------------------------------------------------------- #
+# Direct-intent jurisdiction enforcement (independent-review correction item 3)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def two_jurisdiction_graph(restaurant_row: Any, inspection_row: Any, violation_row: Any) -> Any:
+    """One NYC and one Florida restaurant in the same graph/service
+    instance -- used to prove answer_for_intent derives each restaurant's
+    own jurisdiction independently, never carrying over from a prior call
+    or from any caller-supplied value."""
+    return _graph(
+        restaurants=[
+            restaurant_row(restaurant_id="nyc:1", jurisdiction="nyc"),
+            restaurant_row(restaurant_id="florida:1", jurisdiction="florida"),
+        ],
+        inspections=[
+            inspection_row(inspection_id="nyc:1:1", restaurant_id="nyc:1", jurisdiction="nyc"),
+            inspection_row(
+                inspection_id="florida:1:1", restaurant_id="florida:1", jurisdiction="florida"
+            ),
+        ],
+    )
+
+
+def test_answer_for_intent_has_no_jurisdiction_parameter() -> None:
+    """Structural proof, not just behavioral: the direct-intent interface
+    cannot accept a caller-supplied jurisdiction at all -- there is no
+    parameter through which to try."""
+    import inspect
+
+    signature = inspect.signature(CopilotService.answer_for_intent)
+    assert "jurisdiction" not in signature.parameters
+
+
+def test_answer_for_intent_derives_jurisdiction_from_each_restaurant(
+    two_jurisdiction_graph: Any,
+) -> None:
+    service = CopilotService(two_jurisdiction_graph)
+    nyc_answer = service.answer_for_intent(restaurant_id="nyc:1", intent=Intent.RESTAURANT_IDENTITY)
+    florida_answer = service.answer_for_intent(
+        restaurant_id="florida:1", intent=Intent.RESTAURANT_IDENTITY
+    )
+    assert nyc_answer.jurisdiction == "nyc"
+    assert florida_answer.jurisdiction == "florida"
+
+
+def test_cross_jurisdiction_direct_intent_call_never_leaks_foreign_guidance(
+    two_jurisdiction_graph: Any, write_guidance_corpus: Any
+) -> None:
+    """Even calling the direct-intent interface for an NYC restaurant
+    whose only configured corpus content is Florida guidance must never
+    surface that guidance -- it must fail closed to guidance-unavailable,
+    proving jurisdiction isolation holds independently of answer()'s
+    intent-detection layer."""
+    from plateproof.copilot.corpus import load_corpus
+
+    manifest_path = write_guidance_corpus(
+        documents=[{"document_id": "fl-only-doc", "jurisdiction": "florida"}]
+    )
+    corpus_result = load_corpus(manifest_path)
+    assert corpus_result.store is not None
+
+    service = CopilotService(two_jurisdiction_graph, corpus_result.store)
+    answer = service.answer_for_intent(
+        restaurant_id="nyc:1", intent=Intent.OFFICIAL_GUIDANCE_FOR_DOCUMENTED_CODES
+    )
+    assert answer.jurisdiction == "nyc"
+    assert answer.grounding_status == "refused"  # no NYC violation history at all in this fixture
+    for citation in answer.citations:
+        assert citation.jurisdiction != "florida"
+
+
+def test_unknown_restaurant_direct_intent_call_fails_closed(two_jurisdiction_graph: Any) -> None:
+    service = CopilotService(two_jurisdiction_graph)
+    answer = service.answer_for_intent(
+        restaurant_id="nyc:does-not-exist", intent=Intent.RESTAURANT_IDENTITY
+    )
+    assert answer.grounding_status == "refused"
+    assert answer.jurisdiction is None
+    assert answer.refusal is not None
+    assert answer.refusal.reason == RefusalReason.INSUFFICIENT_EVIDENCE

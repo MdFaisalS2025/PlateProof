@@ -8,7 +8,8 @@
       "text": "High Priority Violations are those which could contribute directly to a foodborne illness or injury. High Priority lodging violations are those which could pose a direct or significant threat to the public health, safety, or welfare.",
       "sha256": "89163bfcae771edacd8535d659fbc0bb693e227498ec0780fc820eb79d27981e",
       "applicable_violation_codes": [],
-      "topics": ["violation_classification", "high_priority"]
+      "topics": ["violation_classification", "high_priority"],
+      "permitted_uses": ["definition"]
     },
     {
       "passage_id": "fl-dbpr-violation-classifications#intermediate",
@@ -16,7 +17,8 @@
       "text": "Intermediate Violations are those which, if not addressed, could lead to risk factors that contribute to foodborne illness or injury. Intermediate lodging violations are those which relate to specific actions, equipment or procedures that contribute to the occurrence of a high priority violation if left unaddressed.",
       "sha256": "eb4e6ffd90331e55842d8b199cee2c0425d16b168704d388f19a5f87965faa22",
       "applicable_violation_codes": [],
-      "topics": ["violation_classification", "intermediate"]
+      "topics": ["violation_classification", "intermediate"],
+      "permitted_uses": ["definition"]
     },
     {
       "passage_id": "fl-dbpr-violation-classifications#basic",
@@ -24,7 +26,8 @@
       "text": "Basic Violations are those which are considered best practices to implement.",
       "sha256": "b7ae4a4e1a77c6e0a1717f70c1e5c5f4b9e6b492c7772c861c5dd09fcbb99461",
       "applicable_violation_codes": [],
-      "topics": ["violation_classification", "basic"]
+      "topics": ["violation_classification", "basic"],
+      "permitted_uses": ["definition"]
     }
   ]
 }

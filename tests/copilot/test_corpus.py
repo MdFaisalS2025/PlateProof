@@ -90,6 +90,7 @@ def test_document_checksum_mismatch_fails_closed(
                         "sha256": hashlib.sha256(b"anything").hexdigest(),
                         "applicable_violation_codes": [],
                         "topics": [],
+                        "permitted_uses": ["definition"],
                     }
                 ],
             }
@@ -122,6 +123,7 @@ def test_passage_checksum_mismatch_fails_closed(
                 "sha256": hashlib.sha256(b"a different text entirely").hexdigest(),
                 "applicable_violation_codes": [],
                 "topics": [],
+                "permitted_uses": ["definition"],
             }
         ],
     }
@@ -348,6 +350,7 @@ def test_oversized_document_file_fails_closed(
                 "sha256": hashlib.sha256(huge_text[:2000].encode("utf-8")).hexdigest(),
                 "applicable_violation_codes": [],
                 "topics": [],
+                "permitted_uses": ["definition"],
                 "padding": huge_text,
             }
         ],

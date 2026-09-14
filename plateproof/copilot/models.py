@@ -19,8 +19,30 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Literal
 
-Jurisdiction = str  # "nyc" | "florida" -- kept as str to match plateproof.graph's node attrs
+# A closed type, not a bare `str`: "nyc"/"florida" are restaurant/claim
+# jurisdictions; "federal" appears only on a Citation (a guidance passage
+# may be federal model guidance) and is never a valid restaurant/claim
+# jurisdiction -- see the citation-jurisdiction-compatibility policy in
+# plateproof.copilot.claims.build_claim, which is the runtime enforcement
+# this static type alone cannot provide.
+Jurisdiction = Literal["nyc", "florida", "federal"]
+RestaurantJurisdiction = Literal["nyc", "florida"]
+
+
+def parse_restaurant_jurisdiction(value: object) -> RestaurantJurisdiction | None:
+    """Validates an arbitrary value (typically a graph node's raw
+    ``jurisdiction`` attribute) against the two jurisdictions a restaurant
+    can actually have. Returns ``None`` for anything else -- including
+    ``"federal"``, which is a valid :class:`Citation` jurisdiction but
+    never a valid restaurant jurisdiction -- never guesses, never raises.
+    This is the runtime enforcement a bare ``str`` type cannot provide."""
+    if value == "nyc":
+        return "nyc"
+    if value == "florida":
+        return "florida"
+    return None
 
 
 class Intent(StrEnum):
@@ -51,6 +73,7 @@ class ClaimType(StrEnum):
     VIOLATION_FREQUENCY = "violation_frequency"
     HISTORY_TREND = "history_trend"
     GUIDANCE_FOR_CODE = "guidance_for_code"
+    GUIDANCE_FOR_TOPIC = "guidance_for_topic"
     GUIDANCE_UNAVAILABLE = "guidance_unavailable"
     FORECAST_AVAILABILITY = "forecast_availability"
     RESTAURANT_IDENTITY = "restaurant_identity"
@@ -66,6 +89,7 @@ AUTHORIZED_EVIDENCE_TYPES: Mapping[ClaimType, frozenset[EvidenceType]] = {
     ClaimType.VIOLATION_FREQUENCY: frozenset({EvidenceType.RESTAURANT_RECORD}),
     ClaimType.HISTORY_TREND: frozenset({EvidenceType.RESTAURANT_RECORD}),
     ClaimType.GUIDANCE_FOR_CODE: frozenset({EvidenceType.GUIDANCE_PASSAGE}),
+    ClaimType.GUIDANCE_FOR_TOPIC: frozenset({EvidenceType.GUIDANCE_PASSAGE}),
     ClaimType.GUIDANCE_UNAVAILABLE: frozenset(),
     ClaimType.FORECAST_AVAILABILITY: frozenset({EvidenceType.MODEL_FORECAST}),
     ClaimType.RESTAURANT_IDENTITY: frozenset({EvidenceType.RESTAURANT_RECORD}),
@@ -152,7 +176,9 @@ class Refusal:
 @dataclass(frozen=True)
 class CopilotAnswer:
     restaurant_id: str
-    jurisdiction: Jurisdiction
+    # None only when the restaurant itself couldn't be resolved -- never a
+    # guessed/default jurisdiction standing in for "unknown".
+    jurisdiction: Jurisdiction | None
     intent: Intent | None
     answer_text: str
     claims: tuple[Claim, ...]

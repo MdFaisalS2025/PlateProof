@@ -49,6 +49,7 @@ class RecurringViolation:
     inspection_dates: tuple[date, ...]
     most_recent_description: str | None
     most_recent_description_date: date | None
+    severity: str | None
 
 
 def restaurant_inspections(graph: PlateProofGraph, restaurant_id: str) -> list[dict[str, Any]]:
@@ -129,6 +130,7 @@ def recurring_violation_codes(
                 inspection_dates=tuple(sorted(o["inspection_date"] for o in occurrences)),
                 most_recent_description=most_recent.get("violation_description"),
                 most_recent_description_date=most_recent.get("inspection_date"),
+                severity=most_recent.get("severity"),
             )
         )
     results.sort(key=lambda r: (-r.occurrence_count, r.violation_code_norm))

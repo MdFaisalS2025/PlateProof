@@ -53,6 +53,7 @@ def make_fictional_passage() -> Any:
         section_locator: str = "Section 1",
         applicable_violation_codes: list[str] | None = None,
         topics: list[str] | None = None,
+        permitted_uses: list[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "passage_id": passage_id,
@@ -61,6 +62,7 @@ def make_fictional_passage() -> Any:
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "applicable_violation_codes": applicable_violation_codes or [],
             "topics": topics or ["fictional_topic"],
+            "permitted_uses": permitted_uses or ["definition"],
         }
 
     return _make

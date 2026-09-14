@@ -76,6 +76,66 @@ def _normalize_violation_code(row: Mapping[str, Any], has_norm_column: bool) -> 
     return str(row.get("violation_code") or "").strip().upper()
 
 
+def _check_node_capacity(graph: nx.MultiDiGraph, limits: GraphScaleLimits, node_id: str) -> None:
+    """Raises before a genuinely new node would be added if the graph is
+    already at its configured node limit. A node id already present never
+    consumes new capacity -- checked first, cheaply, via ``has_node``."""
+    if graph.has_node(node_id):
+        return
+    if graph.number_of_nodes() >= limits.max_nodes:
+        raise GraphScaleExceededError("graph exceeded the configured maximum node count")
+
+
+class _EdgeBudget:
+    """A manual, O(1) edge counter.
+
+    ``networkx``'s own ``MultiDiGraph.number_of_edges()`` (no arguments)
+    calls ``Graph.size()``, which sums degree over every node -- O(V), not
+    O(1). Calling it once per edge addition while building a graph with V
+    nodes and E edges costs O(V*E) overall, which is enough to make a
+    legitimately-sized (tens of thousands of nodes/edges) build take
+    minutes instead of seconds. This counter is incremented exactly once
+    per successful ``add_edge`` call, so checking capacity is a single
+    integer comparison regardless of graph size."""
+
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count = 0
+
+
+def _add_new_node(
+    graph: nx.MultiDiGraph, limits: GraphScaleLimits, node_id: str, **attrs: Any
+) -> None:
+    """For the simple, non-conflict-tracked node types (location, cuisine,
+    violation code) -- adds ``node_id`` only if not already present,
+    enforcing the node limit first."""
+    if graph.has_node(node_id):
+        return
+    _check_node_capacity(graph, limits, node_id)
+    graph.add_node(node_id, **attrs)
+
+
+def _add_new_edge(
+    graph: nx.MultiDiGraph,
+    limits: GraphScaleLimits,
+    edge_budget: _EdgeBudget,
+    source: str,
+    target: str,
+    **attrs: Any,
+) -> None:
+    """Raises before a new edge would be added if the graph is already at
+    its configured edge limit. Every edge in this builder connects two
+    nodes added via :func:`_add_new_node`/:func:`_add_node_with_conflict_check`
+    beforehand, so this is never reachable via ``networkx``'s own
+    endpoint-auto-creation on ``add_edge`` -- both endpoints already exist
+    as real, accounted-for nodes by the time any edge is added."""
+    if edge_budget.count >= limits.max_edges:
+        raise GraphScaleExceededError("graph exceeded the configured maximum edge count")
+    graph.add_edge(source, target, **attrs)
+    edge_budget.count += 1
+
+
 def _add_node_with_conflict_check(
     graph: nx.MultiDiGraph,
     tracking: dict[str, list[str]],
@@ -85,16 +145,23 @@ def _add_node_with_conflict_check(
     attrs: Mapping[str, Any],
     *,
     source_ref: str,
+    limits: GraphScaleLimits,
 ) -> None:
     """Adds ``node_id`` with ``attrs`` the first time it's seen. A later row
     mapping to the same id is never silently overwritten: any field where
     both rows supply a non-null, disagreeing value is recorded as a
     :class:`GraphConflict`. ``tracking`` accumulates every source ref for
     this id purely for the report; it is never stored on the graph node
-    itself."""
+    itself. Raises :class:`GraphScaleExceededError` *before* adding a
+    genuinely new node if the graph is already at its configured limit --
+    an id already present (a repeated reference) never consumes new
+    capacity and never raises."""
+    is_new = not graph.has_node(node_id)
+    if is_new:
+        _check_node_capacity(graph, limits, node_id)
     refs = tracking.setdefault(node_id, [])
     refs.append(source_ref)
-    if not graph.has_node(node_id):
+    if is_new:
         graph.add_node(node_id, **attrs)
         return
     existing = graph.nodes[node_id]
@@ -122,6 +189,7 @@ def build_graph(
     conflicts: list[GraphConflict] = []
     tracking: dict[str, list[str]] = {}
     input_row_counts: dict[str, int] = {}
+    edge_budget = _EdgeBudget()
 
     restaurants_df = input_data.restaurants
     input_row_counts["restaurants"] = restaurants_df.height if restaurants_df is not None else 0
@@ -139,29 +207,52 @@ def build_graph(
                 "postal_code": row.get("postal_code"),
             }
             _add_node_with_conflict_check(
-                graph, tracking, conflicts, node_id, NodeType.RESTAURANT, attrs, source_ref=node_id
+                graph,
+                tracking,
+                conflicts,
+                node_id,
+                NodeType.RESTAURANT,
+                attrs,
+                source_ref=node_id,
+                limits=limits,
             )
 
             as_of = row.get("source_snapshot_date") or row.get("latest_inspection_date")
             loc_id = location_node_id(jurisdiction, row.get("city"), row.get("postal_code"))
-            if not graph.has_node(loc_id):
-                graph.add_node(
-                    loc_id,
-                    node_type=NodeType.LOCATION.value,
-                    jurisdiction=jurisdiction,
-                    city=row.get("city"),
-                    postal_code=row.get("postal_code"),
-                )
-            graph.add_edge(node_id, loc_id, edge_type=EdgeType.LOCATED_IN.value, as_of_date=as_of)
+            _add_new_node(
+                graph,
+                limits,
+                loc_id,
+                node_type=NodeType.LOCATION.value,
+                jurisdiction=jurisdiction,
+                city=row.get("city"),
+                postal_code=row.get("postal_code"),
+            )
+            _add_new_edge(
+                graph,
+                limits,
+                edge_budget,
+                node_id,
+                loc_id,
+                edge_type=EdgeType.LOCATED_IN.value,
+                as_of_date=as_of,
+            )
 
             cuisine = row.get("cuisine")
             if cuisine:
                 norm_cuisine = _normalize_cuisine(cuisine)
                 cuisine_id = cuisine_node_id(norm_cuisine)
-                if not graph.has_node(cuisine_id):
-                    graph.add_node(cuisine_id, node_type=NodeType.CUISINE.value, name=norm_cuisine)
-                graph.add_edge(
-                    node_id, cuisine_id, edge_type=EdgeType.HAS_CUISINE.value, as_of_date=as_of
+                _add_new_node(
+                    graph, limits, cuisine_id, node_type=NodeType.CUISINE.value, name=norm_cuisine
+                )
+                _add_new_edge(
+                    graph,
+                    limits,
+                    edge_budget,
+                    node_id,
+                    cuisine_id,
+                    edge_type=EdgeType.HAS_CUISINE.value,
+                    as_of_date=as_of,
                 )
 
     inspections_df = input_data.inspection_events
@@ -184,11 +275,21 @@ def build_graph(
                 "critical_violation_count": row.get("critical_violation_count"),
             }
             _add_node_with_conflict_check(
-                graph, tracking, conflicts, node_id, NodeType.INSPECTION, attrs, source_ref=node_id
+                graph,
+                tracking,
+                conflicts,
+                node_id,
+                NodeType.INSPECTION,
+                attrs,
+                source_ref=node_id,
+                limits=limits,
             )
             restaurant_id = row["restaurant_id"]
             if graph.has_node(restaurant_id):
-                graph.add_edge(
+                _add_new_edge(
+                    graph,
+                    limits,
+                    edge_budget,
                     restaurant_id,
                     node_id,
                     edge_type=EdgeType.HAS_INSPECTION.value,
@@ -223,11 +324,15 @@ def build_graph(
                 NodeType.VIOLATION_OCCURRENCE,
                 attrs,
                 source_ref=node_id,
+                limits=limits,
             )
 
             inspection_id = row["inspection_id"]
             if graph.has_node(inspection_id):
-                graph.add_edge(
+                _add_new_edge(
+                    graph,
+                    limits,
+                    edge_budget,
                     inspection_id,
                     node_id,
                     edge_type=EdgeType.DOCUMENTED_VIOLATION.value,
@@ -236,14 +341,18 @@ def build_graph(
 
             jurisdiction = str(row.get("jurisdiction"))
             code_id = violation_code_node_id(jurisdiction, code_norm)
-            if not graph.has_node(code_id):
-                graph.add_node(
-                    code_id,
-                    node_type=NodeType.VIOLATION_CODE.value,
-                    jurisdiction=jurisdiction,
-                    code=code_norm,
-                )
-            graph.add_edge(
+            _add_new_node(
+                graph,
+                limits,
+                code_id,
+                node_type=NodeType.VIOLATION_CODE.value,
+                jurisdiction=jurisdiction,
+                code=code_norm,
+            )
+            _add_new_edge(
+                graph,
+                limits,
+                edge_budget,
                 node_id,
                 code_id,
                 edge_type=EdgeType.USES_VIOLATION_CODE.value,
@@ -271,6 +380,7 @@ def build_graph(
                 NodeType.MICHELIN_RESTAURANT,
                 attrs,
                 source_ref=node_id,
+                limits=limits,
             )
 
     michelin_events_df = input_data.michelin_distinction_events
@@ -296,10 +406,14 @@ def build_graph(
                 NodeType.MICHELIN_DISTINCTION_EVENT,
                 attrs,
                 source_ref=node_id,
+                limits=limits,
             )
             michelin_restaurant_id = row["michelin_restaurant_id"]
             if graph.has_node(michelin_restaurant_id):
-                graph.add_edge(
+                _add_new_edge(
+                    graph,
+                    limits,
+                    edge_budget,
                     michelin_restaurant_id,
                     node_id,
                     edge_type=EdgeType.HAS_DISTINCTION_EVENT.value,
@@ -321,22 +435,27 @@ def build_graph(
             official_id = row["official_restaurant_id"]
             michelin_id = row["michelin_restaurant_id"]
             if graph.has_node(official_id) and graph.has_node(michelin_id):
-                graph.add_edge(
+                _add_new_edge(
+                    graph,
+                    limits,
+                    edge_budget,
                     official_id,
                     michelin_id,
                     edge_type=EdgeType.MATCHED_TO_MICHELIN.value,
                     generated_at=row.get("generated_at"),
                 )
 
+    # By this point every node/edge addition above already enforced its
+    # limit incrementally (raising and unwinding before ever exceeding
+    # it), so this is a redundant, defense-in-depth confirmation -- never
+    # the primary enforcement point. A failed build never reaches here at
+    # all, so no partial graph is ever returned.
     plate_graph = PlateProofGraph(graph)
     node_count = plate_graph.number_of_nodes
     edge_count = plate_graph.number_of_edges
     within_limits = node_count <= limits.max_nodes and edge_count <= limits.max_edges
-    if not within_limits:
-        raise GraphScaleExceededError(
-            f"graph exceeded configured scale limits: {node_count} nodes "
-            f"(max {limits.max_nodes}), {edge_count} edges (max {limits.max_edges})"
-        )
+    if not within_limits:  # pragma: no cover - unreachable given the incremental checks above
+        raise GraphScaleExceededError("graph exceeded the configured scale limits")
 
     duplicate_node_ids = tuple(
         sorted(node_id for node_id, refs in tracking.items() if len(refs) > 1)

@@ -42,6 +42,29 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 GuidanceJurisdiction = Literal["nyc", "florida", "federal"]
 
+
+class PermittedUse(StrEnum):
+    """A closed, curated declaration of what a passage may be used for.
+    Every passage must declare at least one -- there is no default, so a
+    curator must make an explicit choice rather than a passage silently
+    becoming eligible for a use nobody reviewed it for.
+
+    ``DEFINITION``: explains what a term/classification means (e.g. what
+    "High Priority" means) -- may never become a preparation instruction.
+
+    ``INSPECTION_PROCESS``: describes how/when inspections happen --
+    informational only, not an instruction.
+
+    ``PREPARATION_ACTION``: an actual, actionable step an operator can
+    take to prepare for an inspection -- the ONLY use that may back a
+    preparation-checklist claim.
+    """
+
+    DEFINITION = "definition"
+    INSPECTION_PROCESS = "inspection_process"
+    PREPARATION_ACTION = "preparation_action"
+
+
 # A single corpus file has no legitimate reason to be large -- generous
 # headroom over real usage, bounding how much untrusted content this
 # reader ever materializes in memory for one file.
@@ -122,6 +145,7 @@ class GuidancePassageRecord(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     applicable_violation_codes: tuple[str, ...] = ()
     topics: tuple[str, ...] = ()
+    permitted_uses: tuple[PermittedUse, ...] = Field(min_length=1)
 
 
 class GuidanceDocumentFile(BaseModel):
@@ -147,6 +171,7 @@ class CorpusPassage:
     text: str
     applicable_violation_codes: tuple[str, ...]
     topics: tuple[str, ...]
+    permitted_uses: tuple[PermittedUse, ...]
     superseded: bool
 
 
@@ -381,6 +406,7 @@ def load_corpus(manifest_path: Path | None) -> CorpusLoadResult:
                     text=passage.text,
                     applicable_violation_codes=passage.applicable_violation_codes,
                     topics=passage.topics,
+                    permitted_uses=passage.permitted_uses,
                     superseded=entry.superseded,
                 )
             )

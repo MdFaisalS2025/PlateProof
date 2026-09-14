@@ -8,7 +8,8 @@
       "text": "The Food Code is a model for safeguarding public health and ensuring food is unadulterated and honestly presented when offered to the consumer. It represents FDA's best advice for a uniform system of provisions that address the safety and protection of food offered at retail and in food service.",
       "sha256": "7391dc14097b991454bf86402962c1b132809eae60a3e3ca483e68101970d2c0",
       "applicable_violation_codes": [],
-      "topics": ["food_code_overview"]
+      "topics": ["food_code_overview"],
+      "permitted_uses": ["definition"]
     }
   ]
 }

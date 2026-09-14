@@ -15,12 +15,12 @@
       "superseded_by": null,
       "provenance_note": "U.S. municipal government public record (NYC.gov); reproduced as a short, section-scoped extract for factual/informational reference, not republication of the full page.",
       "file": "documents/nyc-doh-inspection-process.json",
-      "sha256": "0ee254b3efc5af06b77f8f8079f9e04e6eb041c480f386d60b07e4b100a973a7"
+      "sha256": "d52729d6a0da7ecd6fde24e617ba4e23e364244a1ee4838409203c464d7a89aa"
     },
     {
       "document_id": "fl-dbpr-violation-classifications",
       "jurisdiction": "florida",
-      "title": "Hotels and Restaurants – Inspections",
+      "title": "Hotels and Restaurants \u2013 Inspections",
       "authority": "Florida Department of Business and Professional Regulation, Division of Hotels and Restaurants",
       "source_url": "https://www2.myfloridalicense.com/hotels-restaurants/inspections/",
       "access_date": "2026-09-13",
@@ -30,7 +30,7 @@
       "superseded_by": null,
       "provenance_note": "U.S. state government public record (MyFloridaLicense.com); reproduced as short, section-scoped extracts (the page's own violation classification definitions) for factual/informational reference.",
       "file": "documents/fl-dbpr-violation-classifications.json",
-      "sha256": "03fe6b0b0ed034bc19848c4ef92b8b9d36a563e7e0a339b858272a2b0944d150"
+      "sha256": "1d0440cc1ba08b683c237553e0f06564cceda7d7f82c375494fcca2ed6ed686c"
     },
     {
       "document_id": "fda-food-code-overview",
@@ -45,7 +45,7 @@
       "superseded_by": null,
       "provenance_note": "U.S. federal government public record (FDA.gov); reproduced as a short extract describing the Food Code's purpose. Federal model guidance -- not a jurisdiction-specific enforcement rule; PlateProof never presents this as an NYC or Florida requirement, and no violation code is associated with it.",
       "file": "documents/fda-food-code-overview.json",
-      "sha256": "b52e480093f32221a14a6aa104cdf4eb86ba3760ecc0a51eba3d5e2a69280c03"
+      "sha256": "fb3cf595c47bb574675bf9056bac7774216ce3b958d47efe699461bc66f3470b"
     }
   ]
 }

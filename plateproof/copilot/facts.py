@@ -5,6 +5,11 @@ claim builder reads the graph directly; everything goes through this
 module first, so every fact used in an answer has a consistent, auditable
 citation shape (``citation_id`` always ``"record:<restaurant_id>:<label>"``,
 ``evidence_type`` always ``restaurant_record``).
+
+Every function here validates the jurisdiction it reads off the graph via
+:func:`~plateproof.copilot.models.parse_restaurant_jurisdiction` rather
+than casting a raw string -- an unrecognized/missing jurisdiction value
+means no fact is produced (fail closed), never a guess.
 """
 
 from __future__ import annotations
@@ -12,13 +17,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import date
 
-from plateproof.copilot.models import Citation, EvidenceType, RestaurantFact
+from plateproof.copilot.models import (
+    Citation,
+    EvidenceType,
+    RestaurantFact,
+    RestaurantJurisdiction,
+    parse_restaurant_jurisdiction,
+)
 from plateproof.graph import queries
 from plateproof.graph.store import PlateProofGraph
 
 
 def _record_citation(
-    restaurant_id: str, jurisdiction: str, as_of: date, label: str, excerpt: str
+    restaurant_id: str, jurisdiction: RestaurantJurisdiction, as_of: date, label: str, excerpt: str
 ) -> Citation:
     return Citation(
         citation_id=f"record:{restaurant_id}:{label}",
@@ -35,7 +46,9 @@ def restaurant_identity_fact(graph: PlateProofGraph, restaurant_id: str) -> Rest
     restaurant = queries.restaurant_node(graph, restaurant_id)
     if restaurant is None:
         return None
-    jurisdiction = str(restaurant.get("jurisdiction") or "")
+    jurisdiction = parse_restaurant_jurisdiction(restaurant.get("jurisdiction"))
+    if jurisdiction is None:
+        return None
     location = queries.current_documented_location(graph, restaurant_id)
     cuisine = queries.current_documented_cuisine(graph, restaurant_id)
     as_of = (location or {}).get("as_of_date") or date.today()
@@ -62,7 +75,9 @@ def latest_inspection_fact(graph: PlateProofGraph, restaurant_id: str) -> Restau
     if result is None:
         return None
     restaurant = queries.restaurant_node(graph, restaurant_id)
-    jurisdiction = str((restaurant or {}).get("jurisdiction") or "")
+    jurisdiction = parse_restaurant_jurisdiction((restaurant or {}).get("jurisdiction"))
+    if jurisdiction is None:
+        return None
     excerpt = (
         f"Documented inspection {result.inspection_id} on "
         f"{result.inspection_date.isoformat()} for restaurant {restaurant_id}."
@@ -93,6 +108,9 @@ def recurring_violation_facts(
     items = queries.recurring_violation_codes(graph, restaurant_id, min_occurrences=min_occurrences)
     facts: list[RestaurantFact] = []
     for item in items:
+        jurisdiction = parse_restaurant_jurisdiction(item.jurisdiction)
+        if jurisdiction is None:
+            continue
         as_of = max(item.inspection_dates) if item.inspection_dates else date.today()
         label = f"violation_code_{item.violation_code_norm}"
         excerpt = (
@@ -104,7 +122,7 @@ def recurring_violation_facts(
             RestaurantFact(
                 fact_type="violation_code_frequency",
                 restaurant_id=restaurant_id,
-                jurisdiction=item.jurisdiction,
+                jurisdiction=jurisdiction,
                 as_of_date=as_of,
                 values={
                     "violation_code": item.violation_code,
@@ -114,9 +132,10 @@ def recurring_violation_facts(
                     "inspection_dates": item.inspection_dates,
                     "description": item.most_recent_description,
                     "description_date": item.most_recent_description_date,
+                    "severity": item.severity,
                 },
                 source_node_ids=(),
-                citation=_record_citation(restaurant_id, item.jurisdiction, as_of, label, excerpt),
+                citation=_record_citation(restaurant_id, jurisdiction, as_of, label, excerpt),
             )
         )
     return tuple(facts)
@@ -126,10 +145,12 @@ def inspection_trend_fact(graph: PlateProofGraph, restaurant_id: str) -> Restaur
     rows = queries.restaurant_inspections(graph, restaurant_id)
     if len(rows) < 2:
         return None
+    restaurant = queries.restaurant_node(graph, restaurant_id)
+    jurisdiction = parse_restaurant_jurisdiction((restaurant or {}).get("jurisdiction"))
+    if jurisdiction is None:
+        return None
     by_date = sorted(rows, key=lambda r: r["inspection_date"])
     earliest, latest = by_date[0], by_date[-1]
-    restaurant = queries.restaurant_node(graph, restaurant_id)
-    jurisdiction = str((restaurant or {}).get("jurisdiction") or "")
     excerpt = (
         f"{len(rows)} documented inspections for restaurant {restaurant_id} between "
         f"{earliest['inspection_date'].isoformat()} and {latest['inspection_date'].isoformat()}."
@@ -158,9 +179,11 @@ def inspection_trend_fact(graph: PlateProofGraph, restaurant_id: str) -> Restaur
 def michelin_context_facts(
     graph: PlateProofGraph, restaurant_id: str, as_of_date: date
 ) -> tuple[RestaurantFact, ...]:
-    events = queries.distinctions_as_of(graph, restaurant_id, as_of_date)
     restaurant = queries.restaurant_node(graph, restaurant_id)
-    jurisdiction = str((restaurant or {}).get("jurisdiction") or "")
+    jurisdiction = parse_restaurant_jurisdiction((restaurant or {}).get("jurisdiction"))
+    if jurisdiction is None:
+        return ()
+    events = queries.distinctions_as_of(graph, restaurant_id, as_of_date)
     facts: list[RestaurantFact] = []
     for event in events:
         announced = event["announced_date"]
@@ -190,7 +213,7 @@ def michelin_context_facts(
 
 
 def forecast_fact_from_row(
-    restaurant_id: str, jurisdiction: str, row: Mapping[str, object]
+    restaurant_id: str, jurisdiction: RestaurantJurisdiction, row: Mapping[str, object]
 ) -> RestaurantFact:
     """Wraps one already-precomputed Task 7 prediction row as a typed
     fact. Never computes a prediction and never touches a model artifact

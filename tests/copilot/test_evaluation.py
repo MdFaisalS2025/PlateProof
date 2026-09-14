@@ -202,6 +202,11 @@ def test_jurisdiction_leakage_rate_is_zero(
 def test_violation_code_retrieval_accuracy(
     eval_service: CopilotService, eval_datasets: list[dict[str, Any]]
 ) -> None:
+    """The real starter corpus has no exact code-level mappings -- only
+    curated topic associations (see data/reference/guidance/README.md) --
+    so a documented violation whose severity matches a curated topic must
+    resolve to GUIDANCE_FOR_TOPIC, never a promoted GUIDANCE_FOR_CODE and
+    never GUIDANCE_UNAVAILABLE when a topic match genuinely exists."""
     cases = [
         c
         for c in _all_cases(eval_datasets)
@@ -212,4 +217,5 @@ def test_violation_code_retrieval_accuracy(
         answer = eval_service.answer(restaurant_id=case["restaurant_id"], question=case["question"])
         assert answer.grounding_status == "grounded"
         claim_types = {c.claim_type for c in answer.claims}
-        assert ClaimType.GUIDANCE_FOR_CODE in claim_types, (case["question"], answer.answer_text)
+        assert ClaimType.GUIDANCE_FOR_TOPIC in claim_types, (case["question"], answer.answer_text)
+        assert ClaimType.GUIDANCE_FOR_CODE not in claim_types

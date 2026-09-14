@@ -28,6 +28,7 @@ def test_passages_for_codes_matches_exact_code(write_guidance_corpus: Any) -> No
                         "sha256": __import__("hashlib").sha256(b"Keep hot food hot.").hexdigest(),
                         "applicable_violation_codes": ["04L"],
                         "topics": ["temperature"],
+                        "permitted_uses": ["definition"],
                     }
                 ],
             }
@@ -68,6 +69,7 @@ def test_passages_for_codes_never_crosses_jurisdictions(write_guidance_corpus: A
                         "sha256": hashlib.sha256(text.encode()).hexdigest(),
                         "applicable_violation_codes": ["04L"],
                         "topics": [],
+                        "permitted_uses": ["definition"],
                     }
                 ],
             }
@@ -101,6 +103,7 @@ def test_search_by_topic_or_text_ranks_more_similar_passage_first(
                         "sha256": hashlib.sha256(text_a.encode()).hexdigest(),
                         "applicable_violation_codes": [],
                         "topics": ["temperature"],
+                        "permitted_uses": ["definition"],
                     }
                 ],
             },
@@ -115,6 +118,7 @@ def test_search_by_topic_or_text_ranks_more_similar_passage_first(
                         "sha256": hashlib.sha256(text_b.encode()).hexdigest(),
                         "applicable_violation_codes": [],
                         "topics": ["chemicals"],
+                        "permitted_uses": ["definition"],
                     }
                 ],
             },

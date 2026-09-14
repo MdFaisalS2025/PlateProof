@@ -1,7 +1,15 @@
 """``CopilotService``: the deterministic Copilot core's single entry
 point. Restaurant-scoped only (Task 8A/8B MVP scope -- see the Task 8
-plan's YAGNI decision); jurisdiction is always derived from the resolved
-restaurant, never trusted from caller input.
+plan's YAGNI decision).
+
+Jurisdiction is never accepted as a caller-supplied argument anywhere in
+this class -- both :meth:`answer` and the direct-intent interface
+(:meth:`answer_for_intent`) independently resolve it from the graph's own
+Restaurant node for ``restaurant_id`` and fail closed
+(``insufficient_evidence``) if that node is missing or its jurisdiction
+attribute isn't a recognized value. A caller cannot supply a mismatched
+jurisdiction and reach another jurisdiction's guidance -- there is no
+parameter through which to try.
 
 No optional local model is wired in here during Task 8A. Every answer is
 ``generator_mode="deterministic"``; Task 8B adds a bounded intent-helper
@@ -15,7 +23,7 @@ from datetime import UTC, date, datetime
 
 from plateproof.copilot import claims as claims_module
 from plateproof.copilot import facts, retrieval
-from plateproof.copilot.corpus import CorpusStore
+from plateproof.copilot.corpus import CorpusStore, PermittedUse
 from plateproof.copilot.intents import IntentDetectionOutcome, detect_intent
 from plateproof.copilot.models import (
     Citation,
@@ -25,7 +33,9 @@ from plateproof.copilot.models import (
     Refusal,
     RefusalReason,
     RestaurantFact,
+    RestaurantJurisdiction,
     RetrievedEvidenceItem,
+    parse_restaurant_jurisdiction,
 )
 from plateproof.graph import queries
 from plateproof.graph.store import PlateProofGraph
@@ -59,19 +69,29 @@ class CopilotService:
         self._corpus = corpus_store
         self._forecast_lookup = forecast_lookup
 
-    def answer(self, *, restaurant_id: str, question: str) -> CopilotAnswer:
-        now = datetime.now(UTC)
+    def _resolve_jurisdiction(self, restaurant_id: str) -> RestaurantJurisdiction | None:
+        """The single point every code path uses to learn a restaurant's
+        jurisdiction -- always read fresh from the graph's own Restaurant
+        node, never accepted as a parameter from elsewhere. Returns
+        ``None`` (fail closed) if the restaurant doesn't exist or its
+        jurisdiction attribute isn't a recognized value."""
         restaurant = queries.restaurant_node(self._graph, restaurant_id)
         if restaurant is None:
+            return None
+        return parse_restaurant_jurisdiction(restaurant.get("jurisdiction"))
+
+    def answer(self, *, restaurant_id: str, question: str) -> CopilotAnswer:
+        now = datetime.now(UTC)
+        jurisdiction = self._resolve_jurisdiction(restaurant_id)
+        if jurisdiction is None:
             return self._refuse(
                 restaurant_id,
-                "",
+                None,
                 None,
                 RefusalReason.INSUFFICIENT_EVIDENCE,
                 _NO_RESTAURANT_DETAIL,
                 now,
             )
-        jurisdiction = str(restaurant["jurisdiction"])
 
         detection = detect_intent(question)
         if detection.outcome == IntentDetectionOutcome.PROHIBITED:
@@ -105,13 +125,28 @@ class CopilotService:
             )
 
         assert detection.intent is not None
-        return self.answer_for_intent(
-            restaurant_id=restaurant_id, jurisdiction=jurisdiction, intent=detection.intent, now=now
-        )
+        return self.answer_for_intent(restaurant_id=restaurant_id, intent=detection.intent, now=now)
 
     def answer_for_intent(
-        self, *, restaurant_id: str, jurisdiction: str, intent: Intent, now: datetime
+        self, *, restaurant_id: str, intent: Intent, now: datetime | None = None
     ) -> CopilotAnswer:
+        """The direct-intent interface (used by the UI's example-question
+        buttons, and by tests exercising one intent in isolation). Takes
+        no jurisdiction argument -- it is always re-resolved from the
+        graph here, so a caller cannot pass a restaurant_id belonging to
+        one jurisdiction while asserting another."""
+        now = now or datetime.now(UTC)
+        jurisdiction = self._resolve_jurisdiction(restaurant_id)
+        if jurisdiction is None:
+            return self._refuse(
+                restaurant_id,
+                None,
+                intent,
+                RefusalReason.INSUFFICIENT_EVIDENCE,
+                _NO_RESTAURANT_DETAIL,
+                now,
+            )
+
         # Claim.values holds plain dicts/lists, so Claim is not guaranteed
         # hashable -- ordered_claims is built by object identity, never
         # dict.fromkeys()/a set. citations_by_id only ever receives the
@@ -191,13 +226,8 @@ class CopilotService:
             if not documented:
                 return self._insufficient(restaurant_id, jurisdiction, intent, now)
             for f in documented:
-                items = self._guidance_for_code(jurisdiction, f)
-                claim = claims_module.guidance_claim(
-                    jurisdiction=jurisdiction,
-                    violation_code=str(f.values["violation_code"]),
-                    topic=None,
-                    items=items,
-                    as_of_date=f.as_of_date,
+                claim, items = self._resolve_guidance(
+                    jurisdiction, f, require_preparation_action=False
                 )
                 _record(claim, tuple(item.citation for item in items))
 
@@ -209,15 +239,10 @@ class CopilotService:
                 return self._insufficient(restaurant_id, jurisdiction, intent, now)
             for f in documented:
                 _record(claims_module.recurring_violation_claim(f), (f.citation,))
-                items = self._guidance_for_code(jurisdiction, f)
-                guidance_claim = claims_module.guidance_claim(
-                    jurisdiction=jurisdiction,
-                    violation_code=str(f.values["violation_code"]),
-                    topic=None,
-                    items=items,
-                    as_of_date=f.as_of_date,
+                claim, items = self._resolve_guidance(
+                    jurisdiction, f, require_preparation_action=True
                 )
-                _record(guidance_claim, tuple(item.citation for item in items))
+                _record(claim, tuple(item.citation for item in items))
 
         else:  # pragma: no cover - exhaustive over the closed Intent enum
             return self._refuse(
@@ -246,18 +271,65 @@ class CopilotService:
             generated_at=now,
         )
 
-    def _guidance_for_code(
-        self, jurisdiction: str, fact: RestaurantFact
-    ) -> tuple[RetrievedEvidenceItem, ...]:
-        code = str(fact.values["violation_code_norm"])
-        if self._corpus is None:
-            return ()
-        items = retrieval.passages_for_codes(self._corpus, jurisdiction, [code])
-        if items:
-            return items
-        description = fact.values.get("description")
-        query_text = str(description) if description else code
-        return retrieval.search_by_topic_or_text(self._corpus, jurisdiction, query_text)
+    def _resolve_guidance(
+        self,
+        jurisdiction: RestaurantJurisdiction,
+        fact: RestaurantFact,
+        *,
+        require_preparation_action: bool,
+    ) -> tuple[Claim, tuple[RetrievedEvidenceItem, ...]]:
+        """Resolves one documented violation's guidance claim, in strict
+        priority order, never falling back to text similarity:
+
+        1. An exact, curated ``applicable_violation_codes`` mapping ->
+           ``GUIDANCE_FOR_CODE``.
+        2. Failing that, an exact, curated ``topics`` match against the
+           violation's own severity classification -> ``GUIDANCE_FOR_TOPIC``.
+        3. Failing that, an honest ``GUIDANCE_UNAVAILABLE`` -- never a
+           TF-IDF/text-similarity result promoted into either claim type.
+
+        When ``require_preparation_action`` is set (the preparation-
+        checklist intent), both lookups are additionally restricted to
+        passages curated for ``PermittedUse.PREPARATION_ACTION`` -- a
+        classification/definition passage can never become a checklist
+        step, no matter how well it matches.
+        """
+        code = str(fact.values["violation_code"])
+        code_norm = str(fact.values["violation_code_norm"])
+        severity = fact.values.get("severity")
+        required_use = PermittedUse.PREPARATION_ACTION if require_preparation_action else None
+
+        if self._corpus is not None:
+            code_items = retrieval.passages_for_codes(
+                self._corpus, jurisdiction, [code_norm], required_use=required_use
+            )
+            if code_items:
+                claim = claims_module.guidance_for_code_claim(
+                    jurisdiction=jurisdiction,
+                    violation_code=code,
+                    items=code_items,
+                    as_of_date=fact.as_of_date,
+                )
+                return claim, code_items
+
+            if severity:
+                topic_items = retrieval.passages_for_topics(
+                    self._corpus, jurisdiction, [str(severity)], required_use=required_use
+                )
+                if topic_items:
+                    claim = claims_module.guidance_for_topic_claim(
+                        jurisdiction=jurisdiction,
+                        violation_code=code,
+                        topic=str(severity),
+                        items=topic_items,
+                        as_of_date=fact.as_of_date,
+                    )
+                    return claim, topic_items
+
+        unavailable = claims_module.guidance_unavailable_claim(
+            jurisdiction=jurisdiction, violation_code=code, topic=None, as_of_date=fact.as_of_date
+        )
+        return unavailable, ()
 
     def _render(self, claims: tuple[Claim, ...]) -> str:
         from plateproof.copilot.rendering import render_answer
@@ -265,7 +337,11 @@ class CopilotService:
         return render_answer(claims)
 
     def _insufficient(
-        self, restaurant_id: str, jurisdiction: str, intent: Intent, now: datetime
+        self,
+        restaurant_id: str,
+        jurisdiction: RestaurantJurisdiction,
+        intent: Intent,
+        now: datetime,
     ) -> CopilotAnswer:
         return self._refuse(
             restaurant_id,
@@ -279,7 +355,7 @@ class CopilotService:
     def _refuse(
         self,
         restaurant_id: str,
-        jurisdiction: str,
+        jurisdiction: RestaurantJurisdiction | None,
         intent: Intent | None,
         reason: RefusalReason,
         detail: str,

@@ -88,16 +88,51 @@ def _render_forecast_availability_v1(v: Mapping[str, object]) -> str:
 
 
 def _render_guidance_for_code_v1(v: Mapping[str, object]) -> str:
+    """Only ever rendered for a claim built from an exact, curated
+    ``applicable_violation_codes`` mapping (see
+    ``plateproof.copilot.claims.guidance_for_code_claim``) -- so "mapped
+    to" is an accurate, evidenced claim here, never a text-similarity
+    guess."""
     excerpts_raw = v.get("excerpts") or []
     excerpts = excerpts_raw if isinstance(excerpts_raw, list) else []
-    subject = v.get("violation_code") or v.get("topic") or "this topic"
+    code = v.get("violation_code") or "this code"
     joined = " ".join(str(e) for e in excerpts)
-    return f"Official guidance related to {subject}: {joined}"
+    return f"Official guidance mapped to documented code {code}: {joined}"
+
+
+def _render_guidance_for_topic_v1(v: Mapping[str, object]) -> str:
+    """Deliberately worded as general topical guidance, never as guidance
+    specific to the violation code -- the underlying match is a curated
+    topic association (e.g. a violation's severity classification), not a
+    code-level mapping."""
+    excerpts_raw = v.get("excerpts") or []
+    excerpts = excerpts_raw if isinstance(excerpts_raw, list) else []
+    topic = v.get("topic") or "this topic"
+    code = v.get("violation_code")
+    joined = " ".join(str(e) for e in excerpts)
+    code_phrase = f" (documented as code {code})" if code else ""
+    return (
+        f"PlateProof does not have guidance mapped specifically to this "
+        f"documented violation{code_phrase}, but has reviewed official guidance "
+        f"on the general topic '{topic}' that may be relevant: {joined}"
+    )
 
 
 def _render_guidance_unavailable_v1(v: Mapping[str, object]) -> str:
-    subject = v.get("violation_code") or v.get("topic") or "this topic"
-    return f"No reviewed official guidance is currently available for {subject}."
+    """Describes PlateProof's own reviewed-corpus state, never the state
+    of official guidance in general -- it must never be read as "no such
+    guidance exists anywhere"."""
+    code = v.get("violation_code")
+    topic = v.get("topic")
+    if code:
+        subject_phrase = f"documented code {code}"
+    elif topic:
+        subject_phrase = f"topic '{topic}'"
+    else:
+        subject_phrase = "this topic"
+    return (
+        f"PlateProof does not currently have reviewed official guidance mapped to {subject_phrase}."
+    )
 
 
 _RENDERERS: Mapping[tuple[ClaimType, str], Callable[[Mapping[str, object]], str]] = {
@@ -109,6 +144,7 @@ _RENDERERS: Mapping[tuple[ClaimType, str], Callable[[Mapping[str, object]], str]
     (ClaimType.MICHELIN_CONTEXT, "michelin_context_v1"): _render_michelin_context_v1,
     (ClaimType.FORECAST_AVAILABILITY, "forecast_availability_v1"): _render_forecast_availability_v1,
     (ClaimType.GUIDANCE_FOR_CODE, "guidance_for_code_v1"): _render_guidance_for_code_v1,
+    (ClaimType.GUIDANCE_FOR_TOPIC, "guidance_for_topic_v1"): _render_guidance_for_topic_v1,
     (ClaimType.GUIDANCE_UNAVAILABLE, "guidance_unavailable_v1"): _render_guidance_unavailable_v1,
 }
 
