@@ -269,6 +269,28 @@ FLORIDA_VIOLATION_CATEGORY_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+def normalize_violation_code(raw: str) -> str | None:
+    """Map a free-text Florida violation-category number (as it might appear
+    handwritten or printed on a paper inspection form, e.g. ``"12"`` or
+    ``"#12"``) to the canonical two-digit zero-padded code
+    (``"01"``-``"58"``) used internally -- see ``FLORIDA_VIOLATION_CATEGORY_DESCRIPTIONS``.
+    Unlike NYC's, Florida's canonical code is synthesized from a fixed
+    column index rather than parsed from free text in the ingestion
+    pipeline, so there is no existing private function to wrap; this is the
+    equivalent single, small, additive normalizer Task 9 extraction reuses
+    instead of duplicating the 1-58 bounds check. Returns ``None`` for
+    anything that is not an integer in that range.
+    """
+    stripped = raw.strip().lstrip("#").strip()
+    try:
+        number = int(stripped)
+    except ValueError:
+        return None
+    if not (1 <= number <= 58):
+        return None
+    return f"{number:02d}"
+
+
 def map_florida_violation_classification(
     raw: str | None,
 ) -> Literal["high_priority", "intermediate", "basic", "other"]:

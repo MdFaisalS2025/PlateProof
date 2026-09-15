@@ -289,6 +289,14 @@ def _norm_ws(value: str) -> str:
     return " ".join(value.split())
 
 
+def normalize_violation_code(code: str) -> str:
+    """Public wrapper around the exact NYC violation-code normalization used
+    internally by :func:`build_nyc_inspection_events` (whitespace-collapsed,
+    casefolded), so Task 9 owner-document extraction can reuse this logic
+    instead of duplicating it."""
+    return _norm_ws(code).casefold()
+
+
 def _as_date(value: Any) -> date | None:
     return value if isinstance(value, date) else None
 

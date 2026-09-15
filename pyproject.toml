@@ -22,6 +22,10 @@ dependencies = [
   "streamlit>=1.38,<2",  # local, free (Apache-2.0); Task 7 MVP interface
   "duckdb>=1.1,<2",  # local, free (MIT); embedded SQL over local Parquet, no server
   "networkx>=3.3,<4",  # local, free (BSD-3-Clause); Task 8A in-process temporal knowledge graph
+  "pypdfium2>=4,<6",  # local, free (BSD-3-Clause/Apache-2.0); Task 9A PDF text/render, worker-process only
+  "pillow>=10,<12",  # local, free (MIT-CMU); Task 9A PNG/JPEG decode, worker-process only
+  "rapidocr>=3.9,<4",  # local, free (Apache-2.0); Task 9A OCR, bundled models, worker-process only, offline (verified)
+  "onnxruntime>=1.20,<2",  # local, free (MIT); CPU-only inference backend for rapidocr -- never onnxruntime-gpu
 ]
 
 [project.optional-dependencies]
@@ -58,7 +62,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "joblib.*", "networkx.*"]
+module = ["sklearn.*", "joblib.*", "networkx.*", "pypdfium2.*", "rapidocr.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
