@@ -19,7 +19,7 @@ def test_nyc_extractor_finds_score_date_grade_and_name() -> None:
     blocks = (
         _block("Restaurant Name: Joe's Pizza\nInspection Date: 01/15/2024\nScore: 14\nGrade: A"),
     )
-    candidates, ambiguities, missing = extract_nyc_candidates(blocks)
+    candidates, violations, ambiguities, missing = extract_nyc_candidates(blocks)
     assert candidates["score"].value == 14.0
     assert candidates["grade"].value == "A"
     assert candidates["restaurant_name"].value == "Joe's Pizza"
@@ -31,7 +31,7 @@ def test_nyc_extractor_reports_missing_required_fields() -> None:
     from plateproof.documents.nyc_extractor import extract_nyc_candidates
 
     blocks = (_block("Some unrelated inspection paperwork with no recognizable labels"),)
-    candidates, ambiguities, missing = extract_nyc_candidates(blocks)
+    candidates, violations, ambiguities, missing = extract_nyc_candidates(blocks)
     assert "score" in missing
     assert "inspection_date" in missing
     assert "restaurant_name" in missing
@@ -41,7 +41,7 @@ def test_nyc_extractor_reports_ambiguous_conflicting_score() -> None:
     from plateproof.documents.nyc_extractor import extract_nyc_candidates
 
     blocks = (_block("Score: 14"), _block("Score: 28", page=2))
-    candidates, ambiguities, missing = extract_nyc_candidates(blocks)
+    candidates, violations, ambiguities, missing = extract_nyc_candidates(blocks)
     assert "score" not in candidates
     assert any(a.field_name == "score" for a in ambiguities)
 
@@ -66,7 +66,7 @@ def test_florida_extractor_finds_disposition_and_counts() -> None:
             "Disposition: Warning Issued"
         ),
     )
-    candidates, ambiguities, missing = extract_florida_candidates(blocks)
+    candidates, violations, ambiguities, missing = extract_florida_candidates(blocks)
     assert candidates["high_priority_count"].value == 2.0
     assert candidates["intermediate_count"].value == 1.0
     assert candidates["basic_count"].value == 3.0
@@ -78,7 +78,7 @@ def test_florida_extractor_unrecognized_disposition_text_is_missing_not_guessed(
     from plateproof.documents.florida_extractor import extract_florida_candidates
 
     blocks = (_block("Disposition: Some Unrecognized Free Text Phrase"),)
-    candidates, ambiguities, missing = extract_florida_candidates(blocks)
+    candidates, violations, ambiguities, missing = extract_florida_candidates(blocks)
     assert "disposition_status" not in candidates
     assert "disposition_status" in missing
 

@@ -29,9 +29,6 @@ from plateproof.documents.models import (
 MAX_EVIDENCE_EXCERPT_LENGTH = 300
 _EXCERPT_RADIUS = 40
 
-CONFIDENCE_HIGH_THRESHOLD = 0.8
-CONFIDENCE_MEDIUM_THRESHOLD = 0.5
-
 #: Mirrors plateproof.ingestion.nyc.load_nyc_raw's date-parsing order (ISO,
 #: then m/d/Y) and plateproof.ingestion.florida._parse_date's order
 #: (m/d/Y, then ISO) -- deliberately kept separate per jurisdiction.
@@ -39,12 +36,22 @@ NYC_DATE_FORMATS: tuple[str, ...] = ("%Y-%m-%d", "%m/%d/%Y")
 FLORIDA_DATE_FORMATS: tuple[str, ...] = ("%m/%d/%Y", "%Y-%m-%d")
 
 
-def classify_confidence(overall: float) -> ConfidenceLabel:
-    if overall >= CONFIDENCE_HIGH_THRESHOLD:
-        return "high"
-    if overall >= CONFIDENCE_MEDIUM_THRESHOLD:
-        return "medium"
-    return "low"
+def classify_confidence(
+    *, source: EvidenceSource, corroborated: bool | None = None
+) -> ConfidenceLabel:
+    """Categorical, evidence-condition-based (Finding 8) -- never a numeric
+    average compared against a threshold. An OCR-sourced value is always
+    ``"needs_review"`` regardless of its OCR/pattern scores: an OCR misread
+    is numerically indistinguishable from a correct read. A field where
+    corroboration was checked and explicitly failed is also
+    ``"needs_review"``; everything else backed by embedded text is
+    ``"high"``. Conflicting values and absent evidence never reach this
+    function at all -- see ``resolve_field``."""
+    if source == "ocr":
+        return "needs_review"
+    if corroborated is False:
+        return "needs_review"
+    return "high"
 
 
 def combine_confidence(
@@ -87,13 +94,31 @@ class LabelMatch:
     excerpt: str
 
 
-def find_label_matches(blocks: Sequence[TextBlock], labels: Sequence[str]) -> list[LabelMatch]:
+def find_label_matches(
+    blocks: Sequence[TextBlock], labels: Sequence[str], *, stop_labels: Sequence[str] | None = None
+) -> list[LabelMatch]:
     """Deterministic proximity match: for each label, find ``label`` followed
     by an optional ``:``/``-`` separator and a same-line value. Case
-    insensitive; never uses any ML/fuzzy inference."""
+    insensitive; never uses any ML/fuzzy inference.
+
+    ``stop_labels`` (defaulting to ``labels`` itself) bounds the captured
+    value so it never greedily swallows a *different* labeled field on the
+    same line -- a government form frequently packs several ``Label:
+    value`` pairs onto one line (e.g. ``"CAMIS: 12345   DBA: Joe's
+    Pizza"``). The value capture stops at the first of: two or more spaces,
+    a tab, the start of another known label, or the end of the line.
+    """
+    resolved_stop_labels = stop_labels if stop_labels is not None else labels
+    stop_alternation = "|".join(re.escape(label) for label in resolved_stop_labels)
+    stop_lookahead = (
+        rf"(?=\s{{2,}}|\t|(?:{stop_alternation})\s*[:\-]|\n|$)" if stop_alternation else r"(?=\n|$)"
+    )
+
     matches: list[LabelMatch] = []
     patterns = {
-        label: re.compile(re.escape(label) + r"\s*[:\-]?\s*([^\n]{1,80})", re.IGNORECASE)
+        label: re.compile(
+            re.escape(label) + r"\s*[:\-]?\s*([^\n]{1,80}?)" + stop_lookahead, re.IGNORECASE
+        )
         for label in labels
     }
     for block in blocks:
@@ -113,6 +138,113 @@ def find_label_matches(blocks: Sequence[TextBlock], labels: Sequence[str]) -> li
                     )
                 )
     return matches
+
+
+@dataclass(frozen=True, kw_only=True)
+class ViolationRowMatch:
+    raw_code_text: str
+    description_text: str | None
+    window_text: str
+    page: int
+    source: EvidenceSource
+    excerpt: str
+
+
+_MAX_VIOLATION_DESCRIPTION_LENGTH = 200
+
+
+#: How many lines after the code's own line are considered part of "this
+#: row" for description/critical-flag detection (e.g. a 3-line row: code,
+#: then description, then a critical-flag indicator).
+_VIOLATION_ROW_TRAILING_LINES = 2
+
+
+def find_violation_rows(
+    blocks: Sequence[TextBlock],
+    *,
+    code_label: str,
+    description_labels: Sequence[str] = (),
+    stop_labels: Sequence[str] = (),
+) -> list[ViolationRowMatch]:
+    """One row per occurrence of ``code_label`` in the text. Supports both
+    same-line (``"Violation Code: 10F  Description: ..."``) and
+    newline-separated (code on one line, description on one of the next
+    few lines) layouts: the description is searched for first in the
+    remainder of the code's own line, then in each following line up to
+    ``_VIOLATION_ROW_TRAILING_LINES``.
+
+    ``stop_labels`` (combined with ``description_labels``) bounds the
+    description capture so it never swallows a *different* labeled field
+    packed onto the same line (e.g. a trailing "Critical Flag: ..."),
+    mirroring :func:`find_label_matches`'s same fix.
+
+    Never infers a description from a code or a code from a description --
+    each is only ever the literal text found near its own label.
+    """
+    code_pattern = re.compile(re.escape(code_label) + r"\s*[:\-]?\s*([^\s,;]{1,20})", re.IGNORECASE)
+    desc_pattern = None
+    if description_labels:
+        alternation = "|".join(re.escape(label) for label in description_labels)
+        stop_alternation = "|".join(
+            re.escape(label) for label in (*description_labels, *stop_labels)
+        )
+        stop_lookahead = rf"(?=\s{{2,}}|\t|(?:{stop_alternation})\s*[:\-]|\n|$)"
+        desc_pattern = re.compile(
+            r"(?:"
+            + alternation
+            + r")\s*[:\-]?\s*([^\n]{1,"
+            + str(_MAX_VIOLATION_DESCRIPTION_LENGTH)
+            + r"}?)"
+            + stop_lookahead,
+            re.IGNORECASE,
+        )
+
+    rows: list[ViolationRowMatch] = []
+    for block in blocks:
+        text = block.text
+        for match in code_pattern.finditer(text):
+            raw_code = match.group(1).strip().rstrip(".,;:")
+            if not raw_code:
+                continue
+
+            same_line_end = text.find("\n", match.end())
+            if same_line_end == -1:
+                same_line_end = len(text)
+            same_line_remainder = text[match.end() : same_line_end]
+
+            trailing_lines: list[str] = []
+            cursor = same_line_end + 1
+            for _ in range(_VIOLATION_ROW_TRAILING_LINES):
+                if cursor > len(text):
+                    break
+                line_end = text.find("\n", cursor)
+                if line_end == -1:
+                    line_end = len(text)
+                trailing_lines.append(text[cursor:line_end])
+                cursor = line_end + 1
+
+            description_text = None
+            if desc_pattern is not None:
+                candidates = [same_line_remainder, *trailing_lines]
+                for candidate_text in candidates:
+                    desc_match = desc_pattern.search(candidate_text)
+                    if desc_match is not None:
+                        stripped = desc_match.group(1).strip()
+                        description_text = stripped or None
+                        break
+
+            window_text = same_line_remainder + "\n" + "\n".join(trailing_lines)
+            rows.append(
+                ViolationRowMatch(
+                    raw_code_text=raw_code,
+                    description_text=description_text,
+                    window_text=window_text,
+                    page=block.page,
+                    source=block.source,
+                    excerpt=_excerpt(text, match.start(), match.end()),
+                )
+            )
+    return rows
 
 
 def parse_date_multi(text: str, formats: Sequence[str]) -> date | None:
@@ -179,6 +311,8 @@ def resolve_field[T](
     best = occurrences[0]
     # A value repeated identically across independent matches is mildly
     # more trustworthy than a single occurrence, bounded well below 1.0.
+    # This numeric score is informative metadata only (e.g. a display
+    # bar) -- it never drives confidence_label (Finding 8).
     pattern_confidence = min(0.95, 0.85 + 0.02 * (len(occurrences) - 1))
     confidence = combine_confidence(
         ocr_confidence=best.ocr_confidence,
@@ -195,6 +329,6 @@ def resolve_field[T](
             ),
         ),
         confidence=confidence,
-        confidence_label=classify_confidence(confidence.overall),
+        confidence_label=classify_confidence(source=best.source, corroborated=None),
     )
     return candidate, None

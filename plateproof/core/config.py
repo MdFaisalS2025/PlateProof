@@ -9,10 +9,30 @@ here.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from plateproof.copilot.question_validation import ABSOLUTE_MAX_QUESTION_LENGTH
+from plateproof.documents.limits import (
+    ABSOLUTE_MAX_KILL_GRACE_SECONDS,
+    ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS,
+    ABSOLUTE_MAX_PAGES,
+    ABSOLUTE_MAX_PIXELS_PER_PAGE,
+    ABSOLUTE_MAX_POOL_SIZE,
+    ABSOLUTE_MAX_TEXT_BYTES_PER_DOCUMENT,
+    ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES,
+    ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS,
+    ABSOLUTE_MAX_UPLOAD_BYTES,
+    DEFAULT_KILL_GRACE_SECONDS,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_PIXELS_PER_PAGE,
+    DEFAULT_MAX_TEXT_BYTES_PER_DOCUMENT,
+    DEFAULT_MAX_TOTAL_PREVIEW_BYTES,
+    DEFAULT_MAX_UPLOAD_BYTES,
+    DEFAULT_PAGE_TIMEOUT_SECONDS,
+    DEFAULT_POOL_SIZE,
+    DEFAULT_TOTAL_TIMEOUT_SECONDS,
+)
 
 #: The application's base directory (the repository root, three levels above
 #: this file: plateproof/core/config.py). Relative Settings paths resolve
@@ -64,6 +84,126 @@ class Settings(BaseSettings):
     expose_non_ready_model_cards: bool = False
     max_page_size: int = 50
     prediction_staleness_days: int = 90
+
+    # --- Task 9A: document extraction core (core safety settings, ------ #
+    # not deferred to Task 9B) ------------------------------------------ #
+    documents_max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
+    documents_max_pages: int = DEFAULT_MAX_PAGES
+    documents_max_pixels_per_page: int = DEFAULT_MAX_PIXELS_PER_PAGE
+    documents_max_text_bytes: int = DEFAULT_MAX_TEXT_BYTES_PER_DOCUMENT
+    documents_worker_pool_size: int = DEFAULT_POOL_SIZE
+    documents_worker_page_timeout_seconds: float = DEFAULT_PAGE_TIMEOUT_SECONDS
+    documents_worker_total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS
+    documents_worker_kill_grace_seconds: float = DEFAULT_KILL_GRACE_SECONDS
+    documents_max_total_preview_bytes: int = DEFAULT_MAX_TOTAL_PREVIEW_BYTES
+
+    @field_validator("documents_max_upload_bytes")
+    @classmethod
+    def _validate_documents_max_upload_bytes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_max_upload_bytes must be positive")
+        if value > ABSOLUTE_MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"documents_max_upload_bytes must not exceed {ABSOLUTE_MAX_UPLOAD_BYTES}"
+            )
+        return value
+
+    @field_validator("documents_max_pages")
+    @classmethod
+    def _validate_documents_max_pages(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_max_pages must be positive")
+        if value > ABSOLUTE_MAX_PAGES:
+            raise ValueError(f"documents_max_pages must not exceed {ABSOLUTE_MAX_PAGES}")
+        return value
+
+    @field_validator("documents_max_pixels_per_page")
+    @classmethod
+    def _validate_documents_max_pixels_per_page(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_max_pixels_per_page must be positive")
+        if value > ABSOLUTE_MAX_PIXELS_PER_PAGE:
+            raise ValueError(
+                f"documents_max_pixels_per_page must not exceed {ABSOLUTE_MAX_PIXELS_PER_PAGE}"
+            )
+        return value
+
+    @field_validator("documents_max_text_bytes")
+    @classmethod
+    def _validate_documents_max_text_bytes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_max_text_bytes must be positive")
+        if value > ABSOLUTE_MAX_TEXT_BYTES_PER_DOCUMENT:
+            raise ValueError(
+                f"documents_max_text_bytes must not exceed {ABSOLUTE_MAX_TEXT_BYTES_PER_DOCUMENT}"
+            )
+        return value
+
+    @field_validator("documents_worker_pool_size")
+    @classmethod
+    def _validate_documents_worker_pool_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_worker_pool_size must be positive")
+        if value > ABSOLUTE_MAX_POOL_SIZE:
+            raise ValueError(f"documents_worker_pool_size must not exceed {ABSOLUTE_MAX_POOL_SIZE}")
+        return value
+
+    @field_validator("documents_worker_page_timeout_seconds")
+    @classmethod
+    def _validate_documents_worker_page_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("documents_worker_page_timeout_seconds must be positive")
+        if value > ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS:
+            raise ValueError(
+                "documents_worker_page_timeout_seconds must not exceed "
+                f"{ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS}"
+            )
+        return value
+
+    @field_validator("documents_worker_total_timeout_seconds")
+    @classmethod
+    def _validate_documents_worker_total_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("documents_worker_total_timeout_seconds must be positive")
+        if value > ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS:
+            raise ValueError(
+                "documents_worker_total_timeout_seconds must not exceed "
+                f"{ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS}"
+            )
+        return value
+
+    @field_validator("documents_worker_kill_grace_seconds")
+    @classmethod
+    def _validate_documents_worker_kill_grace_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("documents_worker_kill_grace_seconds must be positive")
+        if value > ABSOLUTE_MAX_KILL_GRACE_SECONDS:
+            raise ValueError(
+                "documents_worker_kill_grace_seconds must not exceed "
+                f"{ABSOLUTE_MAX_KILL_GRACE_SECONDS}"
+            )
+        return value
+
+    @field_validator("documents_max_total_preview_bytes")
+    @classmethod
+    def _validate_documents_max_total_preview_bytes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("documents_max_total_preview_bytes must be positive")
+        if value > ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES:
+            raise ValueError(
+                "documents_max_total_preview_bytes must not exceed "
+                f"{ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_documents_total_timeout_not_less_than_page_timeout(self) -> "Settings":
+        if self.documents_worker_total_timeout_seconds < self.documents_worker_page_timeout_seconds:
+            raise ValueError(
+                "documents_worker_total_timeout_seconds must be at least "
+                "documents_worker_page_timeout_seconds"
+            )
+        return self
 
     @field_validator("copilot_max_question_length")
     @classmethod

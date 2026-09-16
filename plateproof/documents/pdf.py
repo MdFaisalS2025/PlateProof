@@ -4,13 +4,24 @@ PDFium is documented as not thread-safe, even across different documents,
 and executes no JavaScript. This module never runs in the calling API/UI
 process; see ``plateproof.documents.worker`` for the process-isolation
 boundary that enforces this.
+
+Processing is incremental (Finding 5 of the independent review of commit
+735d4a3): one page at a time, never retaining every page's raw RGB raster
+simultaneously. Embedded text is extracted first; a full-resolution OCR
+raster is rendered only when that page actually has no usable embedded
+text and OCR is enabled. Every native PDFium/Pillow resource (page, text
+page, bitmap) is closed deterministically -- via explicit ``close()`` calls
+in ``finally`` blocks, never left to garbage collection -- before the next
+page is opened.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_raw
 
 
 class PdfProcessingError(Exception):
@@ -23,21 +34,70 @@ class PdfProcessingError(Exception):
 
 
 @dataclass(frozen=True, kw_only=True)
-class PdfPageRender:
+class PdfPageInfo:
     page_number: int
     width_px: int
     height_px: int
     embedded_text: str
-    rgb_bytes: bytes
 
 
-def load_pdf_pages(
-    data: bytes, *, max_pages: int, max_pixels: int, render_scale: float = 2.0
-) -> list[PdfPageRender]:
-    """Open ``data`` as a PDF and return one :class:`PdfPageRender` per page,
-    with embedded text and a rendered RGB raster (for OCR fallback) bounded
-    by ``max_pages``/``max_pixels``. Raises :class:`PdfProcessingError`
-    for anything malformed, encrypted, or over a configured limit."""
+#: Renders this page to an RGB raster on demand, at ``render_scale`` unless
+#: an explicit ``scale`` override is given (e.g. a much smaller scale for a
+#: bounded preview render, independent of the OCR-resolution default). Must
+#: be called (if at all) only from within the ``on_page`` callback for this
+#: page -- the underlying PDFium page is closed as soon as that callback
+#: returns, and calling this afterward would use an already-closed native
+#: resource.
+RenderRgb = Callable[..., tuple[bytes, int, int]]
+
+OnPage = Callable[[PdfPageInfo, RenderRgb], None]
+OnPageComplete = Callable[[int], None]
+
+
+def _is_encrypted(doc: pdfium.PdfDocument) -> bool:
+    """``FPDF_GetSecurityHandlerRevision`` returns a non-negative revision
+    number for any document opened under a Standard Security Handler
+    (including one with an empty user password, which pypdfium2 opens
+    without ever raising a password-related error) and ``-1`` for a
+    document with no security handler at all. This is the documented,
+    reliable check -- unlike inspecting a raised exception's message text,
+    it also catches a document that *opened successfully* but is still
+    encrypted (e.g. empty user password, restricted owner permissions)."""
+    return bool(pdfium_raw.FPDF_GetSecurityHandlerRevision(doc.raw) >= 0)
+
+
+def process_pdf_pages(
+    data: bytes,
+    *,
+    max_pages: int,
+    max_pixels: int,
+    on_page: OnPage,
+    on_page_complete: OnPageComplete | None = None,
+    max_cumulative_text_bytes: int | None = None,
+    render_scale: float = 2.0,
+) -> None:
+    """Open ``data`` as a PDF and call ``on_page(info, render_rgb)`` once
+    per page, in order, never holding more than one page's native
+    resources or rendered raster at a time.
+
+    ``render_rgb`` is a zero-argument callable the caller may invoke from
+    within ``on_page`` to render *this* page to an RGB raster -- call it
+    only if embedded text is unusable and OCR is actually needed. After
+    ``on_page`` returns, this page's PDFium page/text-page/bitmap resources
+    are closed immediately (before the next page is opened), and only then
+    is ``on_page_complete(page_number)`` invoked, if provided -- so a
+    caller using it to emit a progress signal never does so before this
+    page's resources are already released.
+
+    If ``max_cumulative_text_bytes`` is given, processing stops (no further
+    pages are opened) once the running total of ``embedded_text`` lengths
+    across processed pages exceeds it.
+
+    Raises :class:`PdfProcessingError` for anything malformed, encrypted,
+    or over a configured limit. The pixel-limit check uses the page's
+    declared dimensions and happens *before* any render() call -- an
+    oversized page never reaches raster allocation.
+    """
     try:
         doc = pdfium.PdfDocument(data)
     except pdfium.PdfiumError as exc:
@@ -47,42 +107,77 @@ def load_pdf_pages(
         raise PdfProcessingError("pdf_malformed") from exc
 
     try:
+        if _is_encrypted(doc):
+            raise PdfProcessingError("encrypted_document")
+
         page_count = len(doc)
         if page_count == 0:
             raise PdfProcessingError("pdf_malformed")
         if page_count > max_pages:
             raise PdfProcessingError("page_limit_exceeded")
 
-        pages: list[PdfPageRender] = []
+        cumulative_text_bytes = 0
         for index in range(page_count):
             try:
                 page = doc[index]
-                textpage = page.get_textpage()
-                text = textpage.get_text_range()
-                width_pt, height_pt = page.get_size()
             except pdfium.PdfiumError as exc:
                 raise PdfProcessingError("pdf_malformed") from exc
-
-            width_px = max(1, int(width_pt * render_scale))
-            height_px = max(1, int(height_pt * render_scale))
-            if width_px * height_px > max_pixels:
-                raise PdfProcessingError("pixel_limit_exceeded")
 
             try:
-                bitmap = page.render(scale=render_scale)
-                pil_image = bitmap.to_pil().convert("RGB")
-            except pdfium.PdfiumError as exc:
-                raise PdfProcessingError("pdf_malformed") from exc
+                try:
+                    textpage = page.get_textpage()
+                except pdfium.PdfiumError as exc:
+                    raise PdfProcessingError("pdf_malformed") from exc
+                try:
+                    text = textpage.get_text_range()
+                finally:
+                    textpage.close()
 
-            pages.append(
-                PdfPageRender(
+                try:
+                    width_pt, height_pt = page.get_size()
+                except pdfium.PdfiumError as exc:
+                    raise PdfProcessingError("pdf_malformed") from exc
+
+                width_px = max(1, int(width_pt * render_scale))
+                height_px = max(1, int(height_pt * render_scale))
+                if width_px * height_px > max_pixels:
+                    raise PdfProcessingError("pixel_limit_exceeded")
+
+                def _render_rgb(
+                    *,
+                    scale: float | None = None,
+                    _page: pdfium.PdfPage = page,
+                    _default_scale: float = render_scale,
+                ) -> tuple[bytes, int, int]:
+                    effective_scale = scale if scale is not None else _default_scale
+                    try:
+                        bitmap = _page.render(scale=effective_scale)
+                    except pdfium.PdfiumError as exc:
+                        raise PdfProcessingError("pdf_malformed") from exc
+                    try:
+                        pil_image = bitmap.to_pil().convert("RGB")
+                        return pil_image.tobytes(), pil_image.width, pil_image.height
+                    finally:
+                        bitmap.close()
+
+                info = PdfPageInfo(
                     page_number=index + 1,
-                    width_px=pil_image.width,
-                    height_px=pil_image.height,
+                    width_px=width_px,
+                    height_px=height_px,
                     embedded_text=text,
-                    rgb_bytes=pil_image.tobytes(),
                 )
-            )
-        return pages
+                on_page(info, _render_rgb)
+                cumulative_text_bytes += len(text.encode("utf-8", errors="ignore"))
+            finally:
+                page.close()
+
+            if on_page_complete is not None:
+                on_page_complete(index + 1)
+
+            if (
+                max_cumulative_text_bytes is not None
+                and cumulative_text_bytes > max_cumulative_text_bytes
+            ):
+                break
     finally:
         doc.close()

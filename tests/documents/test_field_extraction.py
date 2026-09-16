@@ -79,12 +79,15 @@ def test_combine_confidence_averages_available_components() -> None:
     assert 0.8 <= result2.overall <= 1.0
 
 
-def test_classify_confidence_thresholds() -> None:
+def test_classify_confidence_is_categorical_not_numeric() -> None:
+    """Finding 8: confidence is evidence-condition-based (embedded text vs
+    OCR, corroborated vs not) -- never a numeric-average threshold. See
+    test_confidence_semantics.py for the full behavioral test suite."""
     from plateproof.documents.field_extraction import classify_confidence
 
-    assert classify_confidence(0.95) == "high"
-    assert classify_confidence(0.6) == "medium"
-    assert classify_confidence(0.1) == "low"
+    assert classify_confidence(source="embedded_text") == "high"
+    assert classify_confidence(source="ocr") == "needs_review"
+    assert classify_confidence(source="embedded_text", corroborated=False) == "needs_review"
 
 
 def test_resolve_field_returns_none_when_no_matches() -> None:

@@ -18,54 +18,151 @@ next time it is needed.
 
 from __future__ import annotations
 
+import math
 import multiprocessing
 import queue
+import struct
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
 from typing import Any
 
+from plateproof.documents.limits import (
+    ABSOLUTE_MAX_KILL_GRACE_SECONDS,
+    ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS,
+    ABSOLUTE_MAX_POOL_SIZE,
+    ABSOLUTE_MAX_PREVIEW_FRAME_BYTES,
+    ABSOLUTE_MAX_PREVIEW_HEIGHT_PX,
+    ABSOLUTE_MAX_PREVIEW_PIXELS,
+    ABSOLUTE_MAX_PREVIEW_WIDTH_PX,
+    ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES,
+    ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS,
+    ABSOLUTE_MAX_UPLOAD_BYTES,
+    DEFAULT_KILL_GRACE_SECONDS,
+    DEFAULT_PAGE_TIMEOUT_SECONDS,
+    DEFAULT_POOL_SIZE,
+    DEFAULT_TOTAL_TIMEOUT_SECONDS,
+    MIN_KILL_GRACE_SECONDS,
+    MIN_POOL_SIZE,
+)
 from plateproof.documents.worker.protocol import (
     MAX_WORKER_FRAME_BYTES,
     PROTOCOL_VERSION,
     ProtocolViolationError,
+    ValidatedPreview,
     WorkerCrashed,
     WorkerInvalidResponse,
+    WorkerJobError,
     WorkerJobRequest,
     WorkerJobResponse,
     WorkerPageProgress,
+    WorkerPreviewHeader,
     WorkerTimeout,
+    recv_bytes_frame,
     recv_frame,
     send_bytes_frame,
     send_frame,
     validate_worker_message,
 )
 
-WorkerOutcome = WorkerJobResponse | WorkerTimeout | WorkerCrashed | WorkerInvalidResponse
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-#: Default per-application worker-pool sizing (see plan §2/§3b) -- these are
-#: process-local defaults, not a machine-wide ceiling; a deployment running
-#: several application processes must size against the combined total.
-DEFAULT_POOL_SIZE = 2
-MAX_POOL_SIZE = 4
-DEFAULT_PAGE_TIMEOUT_SECONDS = 20.0
-MAX_PAGE_TIMEOUT_SECONDS = 60.0
-DEFAULT_TOTAL_TIMEOUT_SECONDS = 60.0
-MAX_TOTAL_TIMEOUT_SECONDS = 180.0
-#: Fixed constant, not configurable -- a short, bounded grace period between
-#: a polite terminate() and a hard kill().
-KILL_GRACE_SECONDS = 2.0
+
+def _read_png_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Reads the width/height straight out of a PNG's IHDR chunk (bytes
+    16-24, big-endian) via ``struct`` -- no Pillow/PDFium involved. This is
+    trusted parsing of the worker's *own generated* small preview output,
+    never the original hostile upload (Finding 7: no parent-side parser
+    imports for untrusted content)."""
+    if len(data) < 24 or not data.startswith(_PNG_SIGNATURE):
+        return None
+    try:
+        width, height = struct.unpack(">II", data[16:24])
+    except struct.error:
+        return None
+    return width, height
+
+
+#: A validated ``WorkerJobError`` is preserved as its own typed outcome
+#: (Finding 5) -- it is a well-formed, closed-enum report from the worker,
+#: distinct from ``WorkerInvalidResponse`` (a *malformed* or schema-invalid
+#: message the worker never should have sent at all).
+WorkerOutcome = (
+    WorkerJobResponse | WorkerJobError | WorkerTimeout | WorkerCrashed | WorkerInvalidResponse
+)
+
+# Re-exported for backward-compatible import sites; the authoritative values
+# now live in plateproof.documents.limits (Finding 6: centralized, absolute
+# ceilings shared with Settings validation).
+MAX_POOL_SIZE = ABSOLUTE_MAX_POOL_SIZE
+MAX_PAGE_TIMEOUT_SECONDS = ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS
+MAX_TOTAL_TIMEOUT_SECONDS = ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS
+KILL_GRACE_SECONDS = DEFAULT_KILL_GRACE_SECONDS
+
+
+def _exact_int(value: object) -> int | None:
+    if type(value) is bool:
+        return None
+    if type(value) is int:
+        return value
+    return None
+
+
+def _exact_finite_number(value: object) -> float | None:
+    if type(value) is bool:
+        return None
+    if type(value) is int or type(value) is float:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    return None
 
 
 @dataclass(frozen=True, kw_only=True)
 class WorkerPoolConfig:
+    """Validated eagerly at construction time -- an invalid config can never
+    be used to construct a :class:`WorkerPool` at all, so a zero/negative
+    pool size can never leave a caller blocked forever waiting for a free
+    slot (Finding 6)."""
+
     pool_size: int = DEFAULT_POOL_SIZE
     page_timeout_seconds: float = DEFAULT_PAGE_TIMEOUT_SECONDS
     total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS
-    kill_grace_seconds: float = KILL_GRACE_SECONDS
+    kill_grace_seconds: float = DEFAULT_KILL_GRACE_SECONDS
+
+    def __post_init__(self) -> None:
+        pool_size = _exact_int(self.pool_size)
+        if pool_size is None or not (MIN_POOL_SIZE <= pool_size <= ABSOLUTE_MAX_POOL_SIZE):
+            raise ValueError(
+                f"pool_size must be an integer in [{MIN_POOL_SIZE}, {ABSOLUTE_MAX_POOL_SIZE}]"
+            )
+
+        page_timeout = _exact_finite_number(self.page_timeout_seconds)
+        if page_timeout is None or not (0 < page_timeout <= ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS):
+            raise ValueError(
+                "page_timeout_seconds must be a finite number in "
+                f"(0, {ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS}]"
+            )
+
+        total_timeout = _exact_finite_number(self.total_timeout_seconds)
+        if total_timeout is None or not (0 < total_timeout <= ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS):
+            raise ValueError(
+                "total_timeout_seconds must be a finite number in "
+                f"(0, {ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS}]"
+            )
+        if total_timeout < page_timeout:
+            raise ValueError("total_timeout_seconds must be at least page_timeout_seconds")
+
+        kill_grace = _exact_finite_number(self.kill_grace_seconds)
+        if kill_grace is None or not (
+            MIN_KILL_GRACE_SECONDS <= kill_grace <= ABSOLUTE_MAX_KILL_GRACE_SECONDS
+        ):
+            raise ValueError(
+                f"kill_grace_seconds must be a finite number in "
+                f"[{MIN_KILL_GRACE_SECONDS}, {ABSOLUTE_MAX_KILL_GRACE_SECONDS}]"
+            )
 
 
 @dataclass
@@ -155,7 +252,7 @@ class WorkerPool:
                     **asdict(job_request),
                 },
             )
-            send_bytes_frame(conn, document_bytes)
+            send_bytes_frame(conn, document_bytes, max_length=ABSOLUTE_MAX_UPLOAD_BYTES)
         except (ProtocolViolationError, OSError, EOFError):
             return self._classify_failure(handle, reason="failed to send job to worker")
 
@@ -196,10 +293,115 @@ class WorkerPool:
                 last_progress = time.monotonic()
                 continue
             if isinstance(validated, WorkerJobResponse):
-                return validated
-            # A job_error message (typed, closed error_kind) -- still not a
-            # trusted "response," but a well-formed report from the worker.
-            return WorkerInvalidResponse(reason="worker reported a job error")
+                if validated.preview_count == 0:
+                    return validated
+                previews, failure = self._receive_previews(handle, validated, deadline_total)
+                if failure is not None:
+                    return failure
+                assert previews is not None
+                return replace(validated, previews=previews)
+            # A job_error message: a well-formed, closed-enum report from
+            # the worker -- preserved as its own typed outcome (Finding 5),
+            # never collapsed into the generic "malformed message" outcome.
+            assert isinstance(validated, WorkerJobError)
+            return validated
+
+    def _receive_previews(
+        self, handle: _WorkerHandle, response: WorkerJobResponse, deadline_total: float
+    ) -> tuple[tuple[ValidatedPreview, ...] | None, WorkerOutcome | None]:
+        """Reads exactly ``response.preview_count`` (header, binary) pairs,
+        re-validating each before ever trusting it (Finding 7): page number
+        must be one of this response's own pages, strictly increasing
+        (catches both duplicates and out-of-order frames), the actual byte
+        count must match the declared header exactly, the cumulative byte
+        budget must stay bounded, and the bytes must decode as a
+        real, size-bounded PNG. Any violation retires the worker and
+        returns a fail-closed outcome -- never a partial preview set."""
+        conn = handle.conn
+        valid_page_numbers = {page.page_number for page in response.pages}
+        last_page_number = 0
+        total_bytes = 0
+        previews: list[ValidatedPreview] = []
+
+        while len(previews) < response.preview_count:
+            remaining_total = deadline_total - time.monotonic()
+            if remaining_total <= 0:
+                self._kill(handle)
+                return None, WorkerTimeout(stage="total")
+            try:
+                ready = conn.poll(remaining_total)
+            except OSError:
+                return None, self._classify_failure(
+                    handle, reason="connection error while waiting for a preview"
+                )
+            if not ready:
+                continue
+
+            try:
+                raw = recv_frame(conn)
+                header = validate_worker_message(raw)
+            except ProtocolViolationError:
+                return None, self._classify_failure(
+                    handle, reason="worker sent a malformed preview header"
+                )
+            if not isinstance(header, WorkerPreviewHeader):
+                return None, self._classify_failure(
+                    handle, reason="unexpected message where a preview header was expected"
+                )
+            if header.page_number not in valid_page_numbers:
+                return None, self._classify_failure(
+                    handle, reason="preview page number is not one of this response's pages"
+                )
+            if header.page_number <= last_page_number:
+                return None, self._classify_failure(
+                    handle, reason="preview page number is duplicate or out of order"
+                )
+            last_page_number = header.page_number
+
+            total_bytes += header.byte_length
+            if total_bytes > ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES:
+                return None, self._classify_failure(
+                    handle, reason="total preview byte budget exceeded"
+                )
+
+            try:
+                png_bytes = recv_bytes_frame(conn, max_length=ABSOLUTE_MAX_PREVIEW_FRAME_BYTES)
+            except ProtocolViolationError:
+                return None, self._classify_failure(
+                    handle, reason="worker sent a malformed preview binary frame"
+                )
+            if len(png_bytes) != header.byte_length:
+                return None, self._classify_failure(
+                    handle, reason="preview byte length did not match its declared header"
+                )
+
+            dimensions = _read_png_dimensions(png_bytes)
+            if dimensions is None:
+                return None, self._classify_failure(
+                    handle, reason="preview is not a valid, decodable PNG"
+                )
+            width, height = dimensions
+            if (
+                width <= 0
+                or height <= 0
+                or width > ABSOLUTE_MAX_PREVIEW_WIDTH_PX
+                or height > ABSOLUTE_MAX_PREVIEW_HEIGHT_PX
+                or width * height > ABSOLUTE_MAX_PREVIEW_PIXELS
+            ):
+                return None, self._classify_failure(
+                    handle, reason="preview dimensions exceed the maximum allowed size"
+                )
+
+            previews.append(
+                ValidatedPreview(
+                    page_number=header.page_number,
+                    png_bytes=png_bytes,
+                    width_px=width,
+                    height_px=height,
+                )
+            )
+
+        return tuple(previews), None
 
     def _classify_failure(
         self, handle: _WorkerHandle, *, reason: str

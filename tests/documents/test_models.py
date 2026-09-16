@@ -79,6 +79,7 @@ def test_extraction_draft_processing_status_is_closed_enum() -> None:
         upload=UploadMetadata(detected_media_type="application/pdf", byte_size=100, page_count=1),
         pages=(),
         candidates={},
+        violations=(),
         ambiguities=(),
         missing_fields=(),
         warnings=(),

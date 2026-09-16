@@ -56,9 +56,9 @@ def _parser_for(jurisdiction: str, field_name: str) -> Callable[[str], Any] | No
         if field_name == "inspection_date":
             return lambda text: parse_date_multi(text, NYC_DATE_FORMATS)
         return None
-    if field_name in ("high_priority_count", "intermediate_count", "basic_count"):
+    if field_name in ("high_priority_count", "intermediate_count", "basic_count", "visit_sequence"):
         return parse_nonneg_number
-    if field_name == "inspection_date":
+    if field_name in ("inspection_date", "correction_deadline"):
         return lambda text: parse_date_multi(text, FLORIDA_DATE_FORMATS)
     if field_name == "disposition_status":
         return _parse_disposition

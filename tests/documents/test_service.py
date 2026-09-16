@@ -49,6 +49,7 @@ def _echo_success_worker(conn: Any) -> None:
                         "width_px": 200,
                         "height_px": 200,
                         "used_ocr": False,
+                        "ocr_attempted": False,
                         "text_blocks": [
                             {
                                 "text": (

@@ -7,8 +7,11 @@ and no reference to Task 6 models, the Task 8 graph, or Copilot evidence.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any, Literal
 
+from plateproof.documents.field_extraction import classify_confidence
 from plateproof.documents.florida_extractor import extract_florida_candidates
 from plateproof.documents.jurisdiction_detection import (
     check_jurisdiction_mismatch,
@@ -16,6 +19,7 @@ from plateproof.documents.jurisdiction_detection import (
 )
 from plateproof.documents.models import (
     BoundingBox,
+    Candidate,
     ExtractionDraft,
     Jurisdiction,
     OcrEngineInfo,
@@ -53,6 +57,13 @@ def _text_blocks_from_response(response: WorkerJobResponse) -> tuple[TextBlock, 
     return tuple(blocks)
 
 
+def _recompute_confidence_label(candidate: Candidate[Any], *, corroborated: bool) -> Candidate[Any]:
+    source = candidate.evidence[0].source if candidate.evidence else "embedded_text"
+    return replace(
+        candidate, confidence_label=classify_confidence(source=source, corroborated=corroborated)
+    )
+
+
 def build_draft(
     *,
     expected_jurisdiction: Jurisdiction,
@@ -63,12 +74,14 @@ def build_draft(
     ocr_engine: OcrEngineInfo,
 ) -> ExtractionDraft:
     blocks = _text_blocks_from_response(response)
+    preview_by_page = {preview.page_number: preview.png_bytes for preview in response.previews}
     pages = tuple(
         PageMetadata(
             page_number=p.page_number,
             width_px=p.width_px,
             height_px=p.height_px,
             used_ocr=p.used_ocr,
+            preview_png=preview_by_page.get(p.page_number),
         )
         for p in response.pages
     )
@@ -76,14 +89,33 @@ def build_draft(
     detected = detect_jurisdiction(blocks)
     mismatch = check_jurisdiction_mismatch(expected_jurisdiction, detected)
 
+    # Finding 5: a page that had no usable embedded text and needed OCR,
+    # but didn't get usable text from it (engine unavailable or a
+    # per-page OCR failure), means this document is not genuinely
+    # "completed" -- it is reported ocr_unavailable, never silently
+    # folded into "no fields found."
+    ocr_needed_but_missing = any(p.ocr_attempted and not p.used_ocr for p in response.pages)
+
     if expected_jurisdiction == "nyc":
-        candidates, ambiguities, missing = extract_nyc_candidates(blocks)
+        candidates, violations, ambiguities, missing = extract_nyc_candidates(blocks)
     else:
-        candidates, ambiguities, missing = extract_florida_candidates(blocks)
+        candidates, violations, ambiguities, missing = extract_florida_candidates(blocks)
 
     name_candidate = candidates.get("restaurant_name")
     candidate_name_text = name_candidate.display_value if name_candidate is not None else None
     corroborated = corroborate_restaurant_identity(candidate_name_text, expected_restaurant_name)
+
+    if name_candidate is not None:
+        # Finding 8: corroboration is only known *after* extraction, so the
+        # restaurant_name candidate's confidence label is recomputed here
+        # once the corroboration result is available -- never left at its
+        # pre-corroboration default.
+        candidates = {
+            **candidates,
+            "restaurant_name": _recompute_confidence_label(
+                name_candidate, corroborated=corroborated
+            ),
+        }
 
     warnings: list[DocumentWarning] = []
     if mismatch:
@@ -103,8 +135,30 @@ def build_draft(
                 ),
             )
         )
+    if ocr_needed_but_missing:
+        warnings.append(
+            DocumentWarning(
+                code="ocr_unavailable",
+                message=(
+                    "This document appears to need OCR to read its text, but OCR is "
+                    "not available right now. Try a document with selectable text instead."
+                ),
+            )
+        )
 
-    confirmable = not mismatch and corroborated and not ambiguities and not missing
+    has_unresolved_violation_codes = any(v.code is None for v in violations)
+
+    processing_status: Literal["completed", "ocr_unavailable", "failed"] = (
+        "ocr_unavailable" if ocr_needed_but_missing else "completed"
+    )
+    confirmable = (
+        not mismatch
+        and corroborated
+        and not ambiguities
+        and not missing
+        and not ocr_needed_but_missing
+        and not has_unresolved_violation_codes
+    )
 
     return ExtractionDraft(
         draft_id=str(uuid.uuid4()),
@@ -116,11 +170,12 @@ def build_draft(
         upload=upload,
         pages=pages,
         candidates=candidates,
+        violations=violations,
         ambiguities=ambiguities,
         missing_fields=missing,
         warnings=tuple(warnings),
         ocr_engine=ocr_engine,
-        processing_status="completed",
+        processing_status=processing_status,
         generated_at=datetime.now(UTC),
         confirmable=confirmable,
     )

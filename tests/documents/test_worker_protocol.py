@@ -526,6 +526,7 @@ def test_valid_job_response_round_trips_deterministically() -> None:
                 "width_px": 100,
                 "height_px": 200,
                 "used_ocr": True,
+                "ocr_attempted": True,
                 "text_blocks": [
                     {
                         "text": "Score: 14",

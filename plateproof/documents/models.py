@@ -17,7 +17,19 @@ from typing import Any, Literal
 
 Jurisdiction = Literal["nyc", "florida"]
 EvidenceSource = Literal["embedded_text", "ocr"]
-ConfidenceLabel = Literal["high", "medium", "low"]
+#: Categorical, evidence-condition-based classification (Finding 8 of the
+#: independent review of commit 735d4a3) -- never a numeric average of OCR
+#: score and pattern score collapsed against a threshold. "high" requires
+#: the value came from embedded text (never OCR) and, where corroboration
+#: applies (e.g. restaurant name), that it was corroborated; every other
+#: extracted value is "needs_review" -- an OCR-sourced value can never
+#: become "high" merely because its OCR/pattern scores are numerically
+#: large, since an OCR misread is indistinguishable from a correct read by
+#: score alone. A field with no evidence at all is not a Candidate --
+#: "unusable" is represented by its absence (see ``missing_fields``), and a
+#: field with conflicting values is not a Candidate either -- "unresolved"
+#: is represented by an ``Ambiguity``, regardless of any confidence number.
+ConfidenceLabel = Literal["high", "needs_review"]
 ProcessingStatus = Literal["completed", "ocr_unavailable", "failed"]
 DetectedMediaType = Literal["application/pdf", "image/png", "image/jpeg"]
 
@@ -89,6 +101,24 @@ class Candidate[T]:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ViolationRowCandidate:
+    """One extracted violation-code row. Multiple rows are never collapsed
+    into a single scalar field (Finding 1 of the independent review of
+    commit 735d4a3). ``code`` is the jurisdiction-canonical normalized
+    code, or ``None`` when the raw text didn't match a known code in this
+    jurisdiction's own vocabulary -- ``raw_code_text`` is always preserved
+    as review-needed evidence in that case, never guessed (including never
+    inferred from ``description`` similarity)."""
+
+    raw_code_text: str
+    code: str | None
+    description: str | None
+    critical: bool | None
+    evidence: tuple[EvidenceSpan, ...]
+    confidence_label: ConfidenceLabel
+
+
+@dataclass(frozen=True, kw_only=True)
 class UploadMetadata:
     detected_media_type: DetectedMediaType
     byte_size: int
@@ -101,6 +131,11 @@ class PageMetadata:
     width_px: int
     height_px: int
     used_ocr: bool
+    #: A small, worker-generated, worker-validated PNG preview of this
+    #: page, or ``None`` if none was generated/validated for it (Finding
+    #: 7) -- a future Task 9B page displays this directly, never by
+    #: reopening the original uploaded bytes.
+    preview_png: bytes | None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -154,6 +189,7 @@ class ExtractionDraft:
     upload: UploadMetadata
     pages: tuple[PageMetadata, ...]
     candidates: Mapping[str, Candidate[Any]]
+    violations: tuple[ViolationRowCandidate, ...]
     ambiguities: tuple[Ambiguity, ...]
     missing_fields: tuple[str, ...]
     warnings: tuple[Warning, ...]

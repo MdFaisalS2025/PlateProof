@@ -18,6 +18,7 @@ def _draft(jurisdiction: str = "nyc") -> object:
         upload=UploadMetadata(detected_media_type="application/pdf", byte_size=10, page_count=1),
         pages=(),
         candidates={},
+        violations=(),
         ambiguities=(),
         missing_fields=("score",),
         warnings=(),

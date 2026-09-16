@@ -84,6 +84,7 @@ def _echo_success_worker(conn: Any) -> None:
                         "width_px": 10,
                         "height_px": 10,
                         "used_ocr": False,
+                        "ocr_attempted": False,
                         "text_blocks": [],
                     }
                 ],
@@ -129,6 +130,7 @@ def _pid_reporting_worker(conn: Any) -> None:
                         "width_px": 10,
                         "height_px": 10,
                         "used_ocr": False,
+                        "ocr_attempted": False,
                         "text_blocks": [],
                     }
                 ],
@@ -156,6 +158,7 @@ def _slow_then_success_worker(conn: Any) -> None:
                     "width_px": 10,
                     "height_px": 10,
                     "used_ocr": False,
+                    "ocr_attempted": False,
                     "text_blocks": [],
                 }
             ],

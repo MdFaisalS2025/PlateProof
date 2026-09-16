@@ -33,14 +33,24 @@ import struct
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
+from plateproof.documents.limits import (
+    ABSOLUTE_MAX_PREVIEW_FRAME_BYTES,
+    ABSOLUTE_MAX_PREVIEW_PAGES,
+    MAX_JSON_FRAME_BYTES,
+)
+
 #: Exact protocol version this codebase speaks. A mismatch is a protocol
 #: violation, not a negotiation -- there is exactly one supported version.
 PROTOCOL_VERSION = 1
 
-#: Primary memory bound: no frame payload may exceed this many bytes,
-#: checked against the declared header length *before* the second
-#: ``recv_bytes()`` call is ever issued.
-MAX_WORKER_FRAME_BYTES = 8 * 1024 * 1024
+#: Primary memory bound for JSON *control* frames (job_request metadata,
+#: job_response/job_error/page_progress) -- never the raw document itself
+#: (Finding 3: that uses a much larger, separate ceiling -- see
+#: ``send_bytes_frame``'s ``max_length`` parameter and
+#: ``plateproof.documents.limits.ABSOLUTE_MAX_UPLOAD_BYTES``). Checked
+#: against the declared header length *before* the second ``recv_bytes()``
+#: call is ever issued.
+MAX_WORKER_FRAME_BYTES = MAX_JSON_FRAME_BYTES
 
 #: Structural bound on JSON nesting, enforced by a lexical scan *before*
 #: ``json.loads`` is ever called -- not by letting the decoder recurse and
@@ -51,7 +61,9 @@ MAX_PAGES_PER_RESPONSE = 100
 MAX_TEXT_BLOCKS_PER_PAGE = 500
 MAX_TEXT_BLOCK_LENGTH = 5_000
 
-_MESSAGE_TYPES = frozenset({"job_request", "job_response", "job_error", "page_progress"})
+_MESSAGE_TYPES = frozenset(
+    {"job_request", "job_response", "job_error", "page_progress", "preview_header"}
+)
 _ERROR_KINDS = frozenset(
     {
         "pdf_malformed",
@@ -123,13 +135,43 @@ class WorkerPageResult:
     width_px: int
     height_px: int
     used_ocr: bool
+    #: True iff this page had no usable embedded text and OCR was enabled
+    #: for the job, so OCR was actually attempted for it -- distinct from
+    #: ``used_ocr`` (True only if OCR *succeeded* and contributed text).
+    #: ``ocr_attempted and not used_ocr`` means this page needed OCR and
+    #: didn't get usable text from it (Finding 5: distinguishes a genuinely
+    #: OCR-dependent page from one that simply had no text to report).
+    ocr_attempted: bool
     text_blocks: tuple[WorkerTextBlock, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ValidatedPreview:
+    """A worker-generated preview image, re-validated on the parent side
+    (signature, dimensions, byte length, page range, uniqueness, ordering,
+    and total budget) before ever being trusted. Populated by
+    ``worker/pool.py`` after receiving and validating the binary frame that
+    follows a :class:`WorkerPreviewHeader` -- never present on the instance
+    returned directly by :func:`validate_job_response`."""
+
+    page_number: int
+    png_bytes: bytes
+    width_px: int
+    height_px: int
 
 
 @dataclass(frozen=True, kw_only=True)
 class WorkerJobResponse:
     pages: tuple[WorkerPageResult, ...]
     ocr_available: bool
+    #: The number of preview_header+binary-frame pairs the worker will send
+    #: immediately after this job_response, in page order -- the parent
+    #: reads exactly this many, so an extra/missing/duplicate/out-of-order
+    #: frame is always detectable as a protocol violation (Finding 7).
+    preview_count: int = 0
+    #: Populated by worker/pool.py post-receipt; always empty on the
+    #: instance validate_job_response itself returns.
+    previews: tuple[ValidatedPreview, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -150,6 +192,17 @@ class WorkerCrashed:
 @dataclass(frozen=True, kw_only=True)
 class WorkerInvalidResponse:
     reason: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class WorkerPreviewHeader:
+    """Announces the size of the binary preview frame that immediately
+    follows this message on the same connection (Finding 7). The parent
+    reads the declared ``byte_length`` bytes via ``recv_bytes_frame`` bounded
+    by ``ABSOLUTE_MAX_PREVIEW_FRAME_BYTES`` -- never the document ceiling."""
+
+    page_number: int
+    byte_length: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -281,12 +334,21 @@ def send_frame(conn: Any, message: dict[str, Any]) -> None:
     conn.send_bytes(payload)
 
 
-def send_bytes_frame(conn: Any, data: bytes) -> None:
-    """Send a raw binary frame (the document bytes themselves) using the
-    identical two-message header+payload algorithm as :func:`send_frame`,
-    but with no JSON encoding -- this frame carries opaque bytes, not
-    structured data."""
-    if len(data) > MAX_WORKER_FRAME_BYTES:
+def send_bytes_frame(conn: Any, data: bytes, *, max_length: int = MAX_WORKER_FRAME_BYTES) -> None:
+    """Send a raw binary frame using the identical two-message
+    header+payload algorithm as :func:`send_frame`, but with no JSON
+    encoding -- this frame carries opaque bytes, not structured data.
+
+    ``max_length`` defaults to the small JSON-control-frame ceiling as a
+    safe default; a caller sending the document itself or a preview image
+    must pass the appropriate larger/smaller ceiling explicitly (Finding 3
+    -- JSON, document, and preview frames are three distinct budgets that
+    must never be conflated). The sender and receiver must agree on the
+    same ``max_length`` for a given frame; the receiver's own ``max_length``
+    on :func:`recv_bytes_frame` is authoritative and is never widened by
+    anything the sender claims.
+    """
+    if len(data) > max_length:
         raise ProtocolViolationError("outgoing binary frame exceeds the maximum allowed size")
     conn.send_bytes(struct.pack(">I", len(data)))
     conn.send_bytes(data)
@@ -429,6 +491,7 @@ def _validate_page_result(raw: object) -> WorkerPageResult:
         "width_px",
         "height_px",
         "used_ocr",
+        "ocr_attempted",
         "text_blocks",
     }
     if unexpected:
@@ -447,6 +510,10 @@ def _validate_page_result(raw: object) -> WorkerPageResult:
     if used_ocr is None:
         raise ProtocolViolationError("used_ocr must be a boolean")
 
+    ocr_attempted = _exact_bool(raw.get("ocr_attempted"))
+    if ocr_attempted is None:
+        raise ProtocolViolationError("ocr_attempted must be a boolean")
+
     raw_blocks = raw.get("text_blocks")
     if not isinstance(raw_blocks, list) or len(raw_blocks) > MAX_TEXT_BLOCKS_PER_PAGE:
         raise ProtocolViolationError("text_blocks must be a bounded list")
@@ -459,12 +526,19 @@ def _validate_page_result(raw: object) -> WorkerPageResult:
         width_px=width_px,
         height_px=height_px,
         used_ocr=used_ocr,
+        ocr_attempted=ocr_attempted,
         text_blocks=text_blocks,
     )
 
 
 def validate_job_response(raw: dict[str, Any]) -> WorkerJobResponse:
-    unexpected = set(raw.keys()) - {"protocol_version", "message_type", "pages", "ocr_available"}
+    unexpected = set(raw.keys()) - {
+        "protocol_version",
+        "message_type",
+        "pages",
+        "ocr_available",
+        "preview_count",
+    }
     if unexpected:
         raise ProtocolViolationError("job_response contains an unexpected field")
 
@@ -476,8 +550,42 @@ def validate_job_response(raw: dict[str, Any]) -> WorkerJobResponse:
     if ocr_available is None:
         raise ProtocolViolationError("ocr_available must be a boolean")
 
+    preview_count = 0
+    if "preview_count" in raw:
+        parsed_preview_count = _exact_int(raw.get("preview_count"))
+        if parsed_preview_count is None or not (
+            0 <= parsed_preview_count <= ABSOLUTE_MAX_PREVIEW_PAGES
+        ):
+            raise ProtocolViolationError(
+                f"preview_count must be an integer in [0, {ABSOLUTE_MAX_PREVIEW_PAGES}]"
+            )
+        preview_count = parsed_preview_count
+
     pages = tuple(_validate_page_result(p) for p in raw_pages)
-    return WorkerJobResponse(pages=pages, ocr_available=ocr_available)
+    return WorkerJobResponse(pages=pages, ocr_available=ocr_available, preview_count=preview_count)
+
+
+def validate_preview_header(raw: dict[str, Any]) -> WorkerPreviewHeader:
+    unexpected = set(raw.keys()) - {
+        "protocol_version",
+        "message_type",
+        "page_number",
+        "byte_length",
+    }
+    if unexpected:
+        raise ProtocolViolationError("preview_header contains an unexpected field")
+
+    page_number = _exact_int(raw.get("page_number"))
+    if page_number is None or page_number < 1:
+        raise ProtocolViolationError("page_number must be a positive integer")
+
+    byte_length = _exact_int(raw.get("byte_length"))
+    if byte_length is None or not (0 <= byte_length <= ABSOLUTE_MAX_PREVIEW_FRAME_BYTES):
+        raise ProtocolViolationError(
+            f"byte_length must be an integer in [0, {ABSOLUTE_MAX_PREVIEW_FRAME_BYTES}]"
+        )
+
+    return WorkerPreviewHeader(page_number=page_number, byte_length=byte_length)
 
 
 def validate_job_error(raw: dict[str, Any]) -> WorkerJobError:
@@ -554,9 +662,11 @@ def validate_page_progress(raw: dict[str, Any]) -> WorkerPageProgress:
 
 def validate_worker_message(
     raw: dict[str, Any],
-) -> WorkerJobRequest | WorkerJobResponse | WorkerJobError | WorkerPageProgress:
+) -> (
+    WorkerJobRequest | WorkerJobResponse | WorkerJobError | WorkerPageProgress | WorkerPreviewHeader
+):
     """The single closed dispatch point: ``message_type`` selects exactly one
-    of the three fixed validators above. There is no dynamic lookup by name
+    of the fixed validators above. There is no dynamic lookup by name
     anywhere in this function."""
     protocol_version = raw.get("protocol_version")
     if _exact_int(protocol_version) != PROTOCOL_VERSION:
@@ -572,4 +682,6 @@ def validate_worker_message(
         return validate_job_response(raw)
     if message_type == "page_progress":
         return validate_page_progress(raw)
+    if message_type == "preview_header":
+        return validate_preview_header(raw)
     return validate_job_error(raw)

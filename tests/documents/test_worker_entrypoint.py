@@ -15,8 +15,10 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from plateproof.documents.limits import ABSOLUTE_MAX_PREVIEW_FRAME_BYTES
 from plateproof.documents.worker.protocol import (
     WorkerJobRequest,
+    recv_bytes_frame,
     recv_frame,
     send_bytes_frame,
     send_frame,
@@ -85,6 +87,16 @@ def _run_job(request: WorkerJobRequest, document_bytes: bytes) -> Any:
             messages.append(validated)
             if type(validated).__name__ in ("WorkerJobResponse", "WorkerJobError"):
                 break
+        final = messages[-1]
+        if type(final).__name__ == "WorkerJobResponse":
+            # Drain the trailing preview_header + binary frame pairs the
+            # worker sends after job_response, so they never leak into a
+            # later call on the same connection.
+            for _ in range(final.preview_count):
+                header_raw = recv_frame(parent_conn)
+                header = validate_worker_message(header_raw)
+                assert type(header).__name__ == "WorkerPreviewHeader"
+                recv_bytes_frame(parent_conn, max_length=ABSOLUTE_MAX_PREVIEW_FRAME_BYTES)
         return messages
     finally:
         parent_conn.close()
@@ -207,11 +219,18 @@ def test_worker_handles_second_job_on_same_connection() -> None:
                 },
             )
             send_bytes_frame(parent_conn, _minimal_pdf("Score: 20"))
+            response = None
             while True:
                 raw = recv_frame(parent_conn)
                 validated = validate_worker_message(raw)
                 if isinstance(validated, WorkerJobResponse):
+                    response = validated
                     break
+            for _ in range(response.preview_count):
+                header_raw = recv_frame(parent_conn)
+                header = validate_worker_message(header_raw)
+                assert type(header).__name__ == "WorkerPreviewHeader"
+                recv_bytes_frame(parent_conn, max_length=ABSOLUTE_MAX_PREVIEW_FRAME_BYTES)
     finally:
         parent_conn.close()
         thread.join(timeout=5)

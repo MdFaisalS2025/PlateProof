@@ -18,6 +18,7 @@ def _worker_response(text: str, *, page_number: int = 1) -> object:
                 width_px=200,
                 height_px=200,
                 used_ocr=False,
+                ocr_attempted=False,
                 text_blocks=(
                     WorkerTextBlock(
                         text=text, source="embedded_text", ocr_confidence=None, bounding_box=None
