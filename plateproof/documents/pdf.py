@@ -28,9 +28,10 @@ class PdfProcessingError(Exception):
     """Raised with exactly one closed-enum reason string as its sole
     argument (matching ``plateproof.documents.worker.protocol``'s
     ``error_kind`` values): ``"pdf_malformed"``, ``"encrypted_document"``,
-    ``"page_limit_exceeded"``, or ``"pixel_limit_exceeded"``. The underlying
-    PDFium exception is chained for local debugging only -- it is never
-    forwarded across the worker boundary."""
+    ``"page_limit_exceeded"``, ``"pixel_limit_exceeded"``, or
+    ``"text_limit_exceeded"``. The underlying PDFium exception is chained
+    for local debugging only -- it is never forwarded across the worker
+    boundary."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -50,7 +51,14 @@ class PdfPageInfo:
 #: resource.
 RenderRgb = Callable[..., tuple[bytes, int, int]]
 
-OnPage = Callable[[PdfPageInfo, RenderRgb], None]
+#: May return the number of additional extracted-text bytes to count
+#: toward the cumulative document text budget beyond ``embedded_text``
+#: (e.g. OCR-derived text the caller extracted from a rendered raster,
+#: which ``process_pdf_pages`` itself has no visibility into) -- returning
+#: ``None`` counts as zero additional bytes. Without this, a scanned PDF
+#: whose text comes entirely from OCR could bypass the cumulative text
+#: limit, since embedded-text length alone would always read as zero.
+OnPage = Callable[[PdfPageInfo, RenderRgb], int | None]
 OnPageComplete = Callable[[int], None]
 
 
@@ -89,9 +97,16 @@ def process_pdf_pages(
     caller using it to emit a progress signal never does so before this
     page's resources are already released.
 
-    If ``max_cumulative_text_bytes`` is given, processing stops (no further
-    pages are opened) once the running total of ``embedded_text`` lengths
-    across processed pages exceeds it.
+    If ``max_cumulative_text_bytes`` is given, the running total of
+    ``embedded_text`` lengths (plus whatever additional byte count
+    ``on_page`` reports, e.g. OCR text) across processed pages is checked
+    after every page. If including this page's text would exceed the
+    limit, :class:`PdfProcessingError` (``"text_limit_exceeded"``) is
+    raised immediately -- before this page's text is folded into the
+    cumulative total, before ``on_page_complete`` is invoked for it, and
+    before any further page is opened. This never returns normally with
+    only a partial document processed: a caller must not be able to treat
+    a truncated result as a completed extraction.
 
     Raises :class:`PdfProcessingError` for anything malformed, encrypted,
     or over a configured limit. The pixel-limit check uses the page's
@@ -166,18 +181,26 @@ def process_pdf_pages(
                     height_px=height_px,
                     embedded_text=text,
                 )
-                on_page(info, _render_rgb)
-                cumulative_text_bytes += len(text.encode("utf-8", errors="ignore"))
+                extra_text_bytes = on_page(info, _render_rgb) or 0
+                page_text_bytes = len(text.encode("utf-8", errors="ignore")) + max(
+                    0, extra_text_bytes
+                )
+                if (
+                    max_cumulative_text_bytes is not None
+                    and cumulative_text_bytes + page_text_bytes > max_cumulative_text_bytes
+                ):
+                    # Fail closed immediately -- never fold this page's text
+                    # into the total, never signal progress for it, and
+                    # never open another page. A caller must never be able
+                    # to receive a normal return with only a partial
+                    # document processed (second independent review,
+                    # Finding 2).
+                    raise PdfProcessingError("text_limit_exceeded")
+                cumulative_text_bytes += page_text_bytes
             finally:
                 page.close()
 
             if on_page_complete is not None:
                 on_page_complete(index + 1)
-
-            if (
-                max_cumulative_text_bytes is not None
-                and cumulative_text_bytes > max_cumulative_text_bytes
-            ):
-                break
     finally:
         doc.close()

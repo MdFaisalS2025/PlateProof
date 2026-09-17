@@ -111,9 +111,10 @@ def _process_pdf(
     pages: list[dict[str, Any]] = []
     previews: list[tuple[int, bytes]] = []
 
-    def on_page(info: Any, render_rgb: Any) -> None:
+    def on_page(info: Any, render_rgb: Any) -> int:
         text_blocks: list[dict[str, Any]] = []
         used_ocr = False
+        ocr_text_bytes = 0
         embedded = info.embedded_text.strip()
         ocr_attempted = (not embedded) and request.ocr_enabled
         if embedded:
@@ -144,6 +145,12 @@ def _process_pdf(
                             },
                         )
                     )
+                    # OCR text bypasses process_pdf_pages' own embedded_text
+                    # length entirely -- it must be reported back so a
+                    # scanned PDF's cumulative document-text budget is
+                    # enforced the same as an embedded-text one (second
+                    # independent review, Finding 2).
+                    ocr_text_bytes += len(block.text.encode("utf-8", errors="ignore"))
 
         if len(previews) < ABSOLUTE_MAX_PREVIEW_PAGES:
             preview_scale = _preview_scale_for(info.width_px, info.height_px, base_scale=2.0)
@@ -162,6 +169,7 @@ def _process_pdf(
                 "text_blocks": text_blocks[:MAX_TEXT_BLOCKS_PER_PAGE],
             }
         )
+        return ocr_text_bytes
 
     def on_page_complete(page_number: int) -> None:
         # Fired only after process_pdf_pages has already closed this

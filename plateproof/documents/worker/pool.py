@@ -24,6 +24,7 @@ import queue
 import struct
 import threading
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from multiprocessing.connection import Connection
@@ -69,20 +70,119 @@ from plateproof.documents.worker.protocol import (
 )
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_CHUNK_HEADER_SIZE = 8  # 4-byte big-endian length + 4-byte ASCII type
+_PNG_CHUNK_CRC_SIZE = 4
+_PNG_IHDR_LENGTH = 13
+
+#: The exact, narrow PNG form our own worker-side encoder (Pillow saving an
+#: RGB image with no extra options) actually produces: 8-bit truecolor, no
+#: palette/alpha, no compression/filter/interlace variants, and no
+#: ancillary chunks (EXIF, text, gamma, ICC profile, etc.) at all. Anything
+#: outside this exact shape is rejected -- this is deliberately not a
+#: general-purpose PNG decoder.
+_SUPPORTED_BIT_DEPTH = 8
+_SUPPORTED_COLOR_TYPE = 2
+_SUPPORTED_COMPRESSION_METHOD = 0
+_SUPPORTED_FILTER_METHOD = 0
+_SUPPORTED_INTERLACE_METHOD = 0
+_ALLOWED_PNG_CHUNK_TYPES = frozenset({"IHDR", "IDAT", "IEND"})
 
 
-def _read_png_dimensions(data: bytes) -> tuple[int, int] | None:
-    """Reads the width/height straight out of a PNG's IHDR chunk (bytes
-    16-24, big-endian) via ``struct`` -- no Pillow/PDFium involved. This is
-    trusted parsing of the worker's *own generated* small preview output,
-    never the original hostile upload (Finding 7: no parent-side parser
-    imports for untrusted content)."""
-    if len(data) < 24 or not data.startswith(_PNG_SIGNATURE):
+def _parse_png_chunks(data: bytes) -> list[tuple[str, bytes]] | None:
+    """Splits ``data`` into ``(chunk_type, chunk_data)`` pairs after the
+    8-byte PNG signature. Returns ``None`` for anything structurally
+    invalid: a chunk header that doesn't fit in the remaining bytes, a
+    declared chunk length that would run past the end of ``data`` (the
+    frame is already capped upstream, but this bounds the *chunk*, never
+    trusting a length field on its own), a CRC32 mismatch, or any byte left
+    over after the last chunk is consumed (no trailing bytes are ever
+    tolerated)."""
+    if not data.startswith(_PNG_SIGNATURE):
         return None
-    try:
-        width, height = struct.unpack(">II", data[16:24])
-    except struct.error:
+    pos = len(_PNG_SIGNATURE)
+    total = len(data)
+    chunks: list[tuple[str, bytes]] = []
+    while pos < total:
+        if pos + _PNG_CHUNK_HEADER_SIZE > total:
+            return None
+        (length,) = struct.unpack(">I", data[pos : pos + 4])
+        chunk_type_bytes = data[pos + 4 : pos + 8]
+        data_start = pos + _PNG_CHUNK_HEADER_SIZE
+        data_end = data_start + length
+        crc_end = data_end + _PNG_CHUNK_CRC_SIZE
+        if data_end > total or crc_end > total:
+            return None
+        try:
+            chunk_type = chunk_type_bytes.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+        chunk_data = data[data_start:data_end]
+        (declared_crc,) = struct.unpack(">I", data[data_end:crc_end])
+        computed_crc = zlib.crc32(chunk_type_bytes + chunk_data) & 0xFFFFFFFF
+        if declared_crc != computed_crc:
+            return None
+        chunks.append((chunk_type, chunk_data))
+        pos = crc_end
+    if pos != total:
         return None
+    return chunks
+
+
+def _validate_preview_png(
+    data: bytes, *, max_width: int, max_height: int, max_pixels: int
+) -> tuple[int, int] | None:
+    """Validates the ENTIRE PNG container structure -- never just a
+    signature-plus-IHDR check, which a 24-byte fake payload can pass while
+    containing no valid chunks or image data at all (second independent
+    review, Finding 1). This is trusted-boundary validation of a
+    worker-controlled byte string before it is ever handed to a UI image
+    renderer, so it must reject anything that isn't exactly the narrow
+    IHDR -> IDAT+ -> IEND shape our own encoder produces: wrong chunk
+    order, forbidden ancillary/metadata chunks, bad CRCs, impossible or
+    truncated chunk lengths, a missing IEND, or trailing bytes after it.
+
+    Uses only ``struct``/``zlib`` -- never Pillow, PDFium, or any other
+    image decoder -- so no untrusted PNG decoding ever happens in this
+    (trusted, API/Streamlit-facing) parent process. Returns the validated
+    ``(width, height)`` or ``None``.
+    """
+    chunks = _parse_png_chunks(data)
+    if chunks is None or len(chunks) < 3:
+        return None
+    if any(chunk_type not in _ALLOWED_PNG_CHUNK_TYPES for chunk_type, _ in chunks):
+        return None
+
+    first_type, ihdr_data = chunks[0]
+    if first_type != "IHDR" or len(ihdr_data) != _PNG_IHDR_LENGTH:
+        return None
+    width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(
+        ">IIBBBBB", ihdr_data
+    )
+    if (
+        bit_depth != _SUPPORTED_BIT_DEPTH
+        or color_type != _SUPPORTED_COLOR_TYPE
+        or compression != _SUPPORTED_COMPRESSION_METHOD
+        or filter_method != _SUPPORTED_FILTER_METHOD
+        or interlace != _SUPPORTED_INTERLACE_METHOD
+    ):
+        return None
+    if width <= 0 or height <= 0 or width > max_width or height > max_height:
+        return None
+    if width * height > max_pixels:
+        return None
+
+    last_type, last_data = chunks[-1]
+    if last_type != "IEND" or last_data:
+        return None
+    if any(chunk_type == "IEND" for chunk_type, _ in chunks[:-1]):
+        return None  # exactly one IEND, and it must be the final chunk
+
+    middle = chunks[1:-1]
+    if any(chunk_type != "IDAT" for chunk_type, _ in middle):
+        return None  # only IDAT chunks may appear between IHDR and IEND
+    if not any(chunk_data for _, chunk_data in middle):
+        return None  # at least one non-empty IDAT chunk is required
+
     return width, height
 
 
@@ -375,22 +475,17 @@ class WorkerPool:
                     handle, reason="preview byte length did not match its declared header"
                 )
 
-            dimensions = _read_png_dimensions(png_bytes)
+            dimensions = _validate_preview_png(
+                png_bytes,
+                max_width=ABSOLUTE_MAX_PREVIEW_WIDTH_PX,
+                max_height=ABSOLUTE_MAX_PREVIEW_HEIGHT_PX,
+                max_pixels=ABSOLUTE_MAX_PREVIEW_PIXELS,
+            )
             if dimensions is None:
                 return None, self._classify_failure(
-                    handle, reason="preview is not a valid, decodable PNG"
+                    handle, reason="preview is not a valid, well-formed PNG"
                 )
             width, height = dimensions
-            if (
-                width <= 0
-                or height <= 0
-                or width > ABSOLUTE_MAX_PREVIEW_WIDTH_PX
-                or height > ABSOLUTE_MAX_PREVIEW_HEIGHT_PX
-                or width * height > ABSOLUTE_MAX_PREVIEW_PIXELS
-            ):
-                return None, self._classify_failure(
-                    handle, reason="preview dimensions exceed the maximum allowed size"
-                )
 
             previews.append(
                 ValidatedPreview(

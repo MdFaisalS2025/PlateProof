@@ -347,22 +347,73 @@ def test_encrypted_pdf_with_empty_user_password_is_detected() -> None:
     assert exc_info.value.args[0] == "encrypted_document"
 
 
-def test_cumulative_text_limit_stops_processing_deterministically() -> None:
+def test_cumulative_text_limit_raises_and_stops_processing_deterministically() -> None:
     """Once cumulative extracted text across all pages exceeds the
-    configured ceiling, processing stops -- later pages are never
-    processed at all."""
-    from plateproof.documents.pdf import process_pdf_pages
+    configured ceiling, processing must fail closed with a typed error --
+    never return normally with only the earlier pages, which would let a
+    caller silently treat a partially-processed document as complete
+    (second independent review, Finding 2). Later pages must never be
+    opened once the limit is detected, and native PDFium resources for
+    every page touched so far must still be closed."""
+    import plateproof.documents.pdf as pdf_module
+    from plateproof.documents.pdf import PdfProcessingError, process_pdf_pages
 
     data = _minimal_pdf("Score: 14", page_count=3)
     pages_seen: list[int] = []
+    page_closes = []
+    original_page_close = pdf_module.pdfium.PdfPage.close
+
+    def _track_page(self: object) -> None:
+        page_closes.append(1)
+        original_page_close(self)  # type: ignore[misc]
 
     def on_page(info: object, render_rgb: object) -> None:
         pages_seen.append(info.page_number)  # type: ignore[attr-defined]
 
-    process_pdf_pages(
-        data, max_pages=5, max_pixels=50_000_000, on_page=on_page, max_cumulative_text_bytes=5
-    )
-    assert pages_seen == [1]  # "Score: 14" on page 1 alone already exceeds 5 bytes
+    pdf_module.pdfium.PdfPage.close = _track_page
+    try:
+        with pytest.raises(PdfProcessingError) as exc_info:
+            process_pdf_pages(
+                data,
+                max_pages=5,
+                max_pixels=50_000_000,
+                on_page=on_page,
+                max_cumulative_text_bytes=5,
+            )
+    finally:
+        pdf_module.pdfium.PdfPage.close = original_page_close
+
+    assert exc_info.value.args[0] == "text_limit_exceeded"
+    # "Score: 14" on page 1 alone already exceeds 5 bytes -- pages 2 and 3
+    # must never be opened.
+    assert pages_seen == [1]
+    assert len(page_closes) == 1
+
+
+def test_cumulative_text_limit_counts_ocr_text_reported_by_the_caller() -> None:
+    """The cumulative budget must also cover text the caller extracted via
+    OCR (reported back through ``on_page``'s return value) -- a scanned PDF
+    must not be able to bypass the limit just because its text came from
+    OCR instead of the embedded-text layer."""
+    from plateproof.documents.pdf import PdfProcessingError, process_pdf_pages
+
+    # Blank content stream -- no embedded text at all, forcing on_page to
+    # be the sole source of extracted text for the cumulative budget.
+    data = _minimal_pdf(" ", page_count=2)
+
+    def on_page(info: object, render_rgb: object) -> int:
+        render_rgb()  # type: ignore[misc]
+        return 1_000  # simulates a large block of OCR-extracted text
+
+    with pytest.raises(PdfProcessingError) as exc_info:
+        process_pdf_pages(
+            data,
+            max_pages=5,
+            max_pixels=50_000_000,
+            on_page=on_page,
+            max_cumulative_text_bytes=5,
+        )
+    assert exc_info.value.args[0] == "text_limit_exceeded"
 
 
 def test_page_complete_callback_fires_only_after_page_cleanup() -> None:
