@@ -23,6 +23,24 @@ INDEPENDENCE_STATEMENT = (
     "Regulation, or any health department."
 )
 
+#: Task 9B: shown before an owner ever uploads a document, and repeated on
+#: every extraction result and the downloadable JSON artifact. A machine
+#: extraction (or a user's own correction to it) is never an official
+#: inspection record, and it never feeds PlateProof's risk models.
+DOCUMENT_PRIVACY_NOTICE = (
+    "PlateProof does not verify restaurant ownership, and this tool does not create an "
+    "official inspection record. Uploaded documents are processed only to help you review "
+    "your own extracted data; PlateProof does not persist your upload, and no uploaded "
+    "content is ever used to train or update PlateProof's prediction models."
+)
+
+USER_SUBMITTED_RECORD_DISCLAIMER = (
+    "This is a user-submitted record produced from a machine-assisted extraction of an "
+    "uploaded document, optionally corrected by the uploader. It is not an official "
+    "inspection record from any health department, and it does not affect PlateProof's "
+    "risk predictions for this restaurant."
+)
+
 # Fixed, allowlisted official government dataset landing pages -- never built
 # from a caller- or table-supplied URL fragment.
 _NYC_SOURCE_URL = "https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j"

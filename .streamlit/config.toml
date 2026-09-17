@@ -1,0 +1,17 @@
+# Task 9B: Streamlit's own coarse, megabyte-granularity upload ceiling --
+# the FIRST Streamlit-side limit, analogous to Layer 1's role for the
+# FastAPI route (see plateproof/api/routes/documents.py's module docstring
+# for the full two-layer model this mirrors). It must be the smallest
+# whole-megabyte value that is still >= the operational byte limit
+# (Settings.documents_max_upload_bytes, default 15 MiB = 15 here); the
+# EXACT byte ceiling is still enforced afterward, in the page itself, by
+# the same shared plateproof.documents.validation.validate_upload_bytes
+# function the API route uses -- this setting is defense in depth on top
+# of that, never a substitute for it, and it is NOT a substitute for a
+# real reverse-proxy body-size limit if this Streamlit app is itself
+# directly internet-facing.
+#
+# If Settings.documents_max_upload_bytes is changed from its default, this
+# value must be updated to match (round up to the nearest whole megabyte).
+[server]
+maxUploadSize = 15

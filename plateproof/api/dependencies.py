@@ -11,6 +11,7 @@ from fastapi import Request
 from plateproof.copilot.corpus import CorpusStore
 from plateproof.copilot.generators.base import IntentHelper
 from plateproof.core.config import Settings
+from plateproof.documents.worker.pool import WorkerPool
 from plateproof.graph.builder import GraphService
 from plateproof.serving.model_registry_service import ModelMetadataReader
 from plateproof.serving.repository import Repository
@@ -44,3 +45,14 @@ def get_corpus_store(request: Request) -> CorpusStore | None:
 def get_intent_helper(request: Request) -> IntentHelper | None:
     intent_helper: IntentHelper | None = request.app.state.intent_helper
     return intent_helper
+
+
+def get_document_worker_pool(request: Request) -> WorkerPool:
+    """This process's own document worker pool (Task 9B). Pool limits are
+    per application process -- a separate FastAPI process, and a separate
+    Streamlit process (see ``app.theme.document_worker_pool``), each own
+    their own pool; see the module docstring of
+    ``plateproof.api.routes.documents`` for the deployment-sizing
+    consequence of that."""
+    pool: WorkerPool = request.app.state.document_worker_pool
+    return pool

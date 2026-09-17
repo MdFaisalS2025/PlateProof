@@ -276,3 +276,119 @@ class CopilotQueryResponse(BaseModel):
     warnings: list[str]
     generated_at: datetime
     disclaimer: str
+
+
+# --------------------------------------------------------------------------- #
+# Task 9B: owner document extraction (POST /owners/documents/extract).       #
+# Every field below is a bounded, public-safe projection of an              #
+# ``ExtractionDraft`` (see plateproof.api.documents_projection) -- never the  #
+# raw upload bytes, a filesystem path, or a native-parser exception         #
+# message. Full OCR text is never exposed: only the same short, bounded     #
+# evidence excerpt already used to build each Candidate.                    #
+# --------------------------------------------------------------------------- #
+
+
+class BoundingBoxPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class EvidenceSpanPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    page: int
+    excerpt: str
+    bounding_box: BoundingBoxPublic | None
+    source: Literal["embedded_text", "ocr"]
+
+
+class CandidatePublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    field_name: str
+    value: Any
+    display_value: str | None
+    evidence: list[EvidenceSpanPublic]
+    confidence_label: Literal["high", "needs_review"]
+
+
+class ViolationRowPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    raw_code_text: str
+    code: str | None
+    description: str | None
+    critical: bool | None
+    evidence: list[EvidenceSpanPublic]
+    confidence_label: Literal["high", "needs_review"]
+
+
+class AmbiguityPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    field_name: str
+    reason: str
+    candidate_values: list[str]
+
+
+class DocumentWarningPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    message: str
+
+
+class PageMetadataPublic(BaseModel):
+    """``preview_png_base64`` is the same worker-generated, worker-validated
+    PNG bytes as ``PageMetadata.preview_png`` (Task 9A, Finding 7), base64-
+    encoded only so it can travel inside a JSON response body -- never a
+    second, independent render of the original upload."""
+
+    model_config = ConfigDict(frozen=True)
+
+    page_number: int
+    width_px: int
+    height_px: int
+    used_ocr: bool
+    preview_png_base64: str | None
+
+
+class OcrEngineInfoPublic(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    engine_name: Literal["rapidocr"]
+    available: bool
+    unavailable_reason: str | None
+
+
+class DocumentExtractionResponse(BaseModel):
+    """The complete, public-safe projection of one ``ExtractionDraft``.
+    Never persisted server-side -- this response is the only place the
+    result of one extraction job exists once the request completes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    draft_id: str
+    jurisdiction_expected: Jurisdiction
+    jurisdiction_detected: Jurisdiction | None
+    jurisdiction_mismatch: bool
+    restaurant_id: str
+    restaurant_identity_corroborated: bool
+    upload_media_type: Literal["application/pdf", "image/png", "image/jpeg"]
+    upload_byte_size: int
+    upload_page_count: int
+    pages: list[PageMetadataPublic]
+    candidates: dict[str, CandidatePublic]
+    violations: list[ViolationRowPublic]
+    ambiguities: list[AmbiguityPublic]
+    missing_fields: list[str]
+    warnings: list[DocumentWarningPublic]
+    ocr_engine: OcrEngineInfoPublic
+    processing_status: Literal["completed", "ocr_unavailable", "failed"]
+    generated_at: datetime
+    confirmable: bool
+    disclaimer: str

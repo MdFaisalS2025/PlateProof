@@ -22,10 +22,12 @@ import math
 import multiprocessing
 import queue
 import struct
+import sys
 import threading
 import time
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
@@ -68,6 +70,38 @@ from plateproof.documents.worker.protocol import (
     send_frame,
     validate_worker_message,
 )
+
+
+@contextmanager
+def _safe_main_module_for_spawn() -> Iterator[None]:
+    """Streamlit's own script runner replaces ``sys.modules["__main__"]``
+    with a fake, bare (``__spec__``-less) module wrapping the CURRENTLY
+    EXECUTING PAGE SCRIPT on every single rerun
+    (``streamlit/runtime/scriptrunner/script_runner.py``), so that pickling
+    works inside page code. On Windows, ``multiprocessing``'s spawn
+    bootstrap (``multiprocessing.spawn.get_preparation_data``) checks
+    whether ``__main__`` has a real module spec; a bare module has none, so
+    it falls back to reconstructing the child's ``__main__`` by literally
+    re-executing ``sys.modules["__main__"].__file__`` via
+    ``runpy.run_path`` -- for a Streamlit page, that file has no real
+    ``ScriptRunContext`` and crashes immediately, verified directly against
+    a real ``AppTest`` run. Pointing ``__main__`` at this own, real,
+    properly-spec'd module for the duration of ``Process.start()`` makes
+    the child instead safely re-``import`` it by name -- never re-execute
+    arbitrary page code -- and the original ``__main__`` (whatever it was)
+    is restored immediately afterward, so nothing about a caller's own
+    ``__main__`` is permanently changed. A no-op for a normal API/CLI/test
+    process, whose ``__main__`` already has a real spec."""
+    original = sys.modules.get("__main__")
+    try:
+        sys.modules["__main__"] = sys.modules[__name__]
+        yield
+    finally:
+        if original is not None:
+            sys.modules["__main__"] = original
+        else:
+            del sys.modules["__main__"]
+
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_CHUNK_HEADER_SIZE = 8  # 4-byte big-endian length + 4-byte ASCII type
@@ -332,8 +366,9 @@ class WorkerPool:
 
     def _spawn_worker(self) -> _WorkerHandle:
         parent_conn, child_conn = self._ctx.Pipe(duplex=True)
-        process = self._ctx.Process(target=self._worker_main, args=(child_conn,), daemon=True)
-        process.start()
+        with _safe_main_module_for_spawn():
+            process = self._ctx.Process(target=self._worker_main, args=(child_conn,), daemon=True)
+            process.start()
         # Parent hygiene: close our copy of the child's end immediately so
         # EOF is detected correctly if the child dies.
         child_conn.close()

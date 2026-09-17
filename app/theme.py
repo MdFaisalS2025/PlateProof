@@ -6,6 +6,7 @@ like the FastAPI routes.
 
 from __future__ import annotations
 
+import atexit
 from typing import Any
 
 import streamlit as st
@@ -15,6 +16,7 @@ from plateproof.copilot.generators.base import IntentHelper
 from plateproof.copilot.service import CopilotService
 from plateproof.copilot.wiring import build_corpus_store, build_intent_helper
 from plateproof.core.config import Settings, get_settings
+from plateproof.documents.worker.pool import WorkerPool, WorkerPoolConfig
 from plateproof.graph.builder import GraphService
 from plateproof.serving.display import INDEPENDENCE_STATEMENT
 from plateproof.serving.model_registry_service import ModelMetadataReader
@@ -214,3 +216,59 @@ def format_jurisdiction_measure_note(jurisdiction: str) -> str:
 
 def to_dict_list(rows: list[Any]) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
+
+
+# Task 9B: this Streamlit process owns its OWN document worker pool --
+# entirely separate from any FastAPI process's pool
+# (``plateproof.api.main.create_app``). A ``multiprocessing`` pool cannot be
+# meaningfully shared across unrelated parent processes, so the configured
+# ``documents_worker_pool_size`` is a per-process limit, not a machine-wide
+# one; see README.md for the combined-worker-count deployment-sizing
+# consequence. Cached exactly like every other accessor above (a plain
+# module-level dict, not ``st.cache_resource``, for AppTest compatibility) --
+# built once per settings and reused for the life of this process.
+_document_worker_pool_cache: dict[str, WorkerPool] = {}
+
+
+def _documents_cache_key(settings: Settings) -> str:
+    return "|".join(
+        str(v)
+        for v in (
+            settings.documents_worker_pool_size,
+            settings.documents_worker_page_timeout_seconds,
+            settings.documents_worker_total_timeout_seconds,
+            settings.documents_worker_kill_grace_seconds,
+        )
+    )
+
+
+def document_worker_pool() -> WorkerPool:
+    settings = get_settings()
+    key = _documents_cache_key(settings)
+    if key not in _document_worker_pool_cache:
+        _document_worker_pool_cache[key] = WorkerPool(
+            config=WorkerPoolConfig(
+                pool_size=settings.documents_worker_pool_size,
+                page_timeout_seconds=settings.documents_worker_page_timeout_seconds,
+                total_timeout_seconds=settings.documents_worker_total_timeout_seconds,
+                kill_grace_seconds=settings.documents_worker_kill_grace_seconds,
+            )
+        )
+    return _document_worker_pool_cache[key]
+
+
+def shutdown_document_worker_pools() -> None:
+    """Explicit process-level shutdown path (Task 9B): terminates/joins/
+    kills every live worker process this Streamlit process has spawned and
+    closes their pipe handles. Registered below via ``atexit`` so a real
+    deployment gets this for free (mirroring the FastAPI app's ``lifespan``
+    shutdown handler); tests may also call it directly in teardown."""
+    for pool in _document_worker_pool_cache.values():
+        pool.shutdown()
+    _document_worker_pool_cache.clear()
+
+
+# Registered once per interpreter (module import is cached) -- covers every
+# real Streamlit server process regardless of which page it started on,
+# since every page imports this module.
+atexit.register(shutdown_document_worker_pools)

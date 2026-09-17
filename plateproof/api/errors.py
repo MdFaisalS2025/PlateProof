@@ -12,11 +12,14 @@ from fastapi.responses import JSONResponse
 from plateproof.api.schemas import ApiError
 from plateproof.serving.errors import (
     DatastoreUnavailableError,
+    DocumentRequestError,
+    DocumentTooLargeError,
     InvalidPaginationError,
     InvalidQueryError,
     InvalidQuestionError,
     ModelCardNotFoundError,
     RestaurantNotFoundError,
+    UnsupportedDocumentTypeError,
 )
 
 _Handler = Callable[[Request, Exception], Awaitable[JSONResponse]]
@@ -28,6 +31,9 @@ _STATUS_BY_ERROR: dict[type[Exception], int] = {
     RestaurantNotFoundError: 404,
     ModelCardNotFoundError: 404,
     DatastoreUnavailableError: 503,
+    DocumentRequestError: 422,
+    DocumentTooLargeError: 413,
+    UnsupportedDocumentTypeError: 415,
 }
 
 

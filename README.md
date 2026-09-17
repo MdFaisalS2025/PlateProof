@@ -163,12 +163,91 @@ specific violation. Michelin recognition is contextual culinary
 information and never implies food safety. Refusal is the default for
 anything PlateProof cannot ground in documented evidence.
 
+## Owner document extraction (Task 9)
+
+`POST /owners/documents/extract` and the "Document Reader" Streamlit page
+let a restaurant owner upload their own PDF/PNG/JPEG inspection document
+and review a machine-assisted, evidence-grounded extraction of it. Both
+entry points call the exact same
+`plateproof.documents.service.extract_document(...)` function -- neither
+ever parses a document itself. All real parsing (PDFium, Pillow, RapidOCR)
+happens only inside a short-lived, killable, non-pickle-protocol worker
+process this function submits to; see `plateproof/documents/worker/` for
+the process-isolation boundary and `plateproof/documents/limits.py` for
+every configured ceiling. Nothing uploaded is ever persisted server-side,
+used to train or update a model, or written to the graph/Copilot corpus --
+a completed extraction is a `record_status="user_submitted"` artifact the
+owner can download as JSON, never an official inspection record.
+
+### Deployment requirements (read before exposing either entry point)
+
+**A reverse proxy or ASGI body-size middleware is REQUIRED in front of the
+FastAPI service.** Uvicorn has no built-in request-body-size limit of its
+own (its `--h11-max-incomplete-event-size` flag bounds only the request
+line and headers of an *incomplete* HTTP event, never the body) --
+without a gateway (nginx `client_max_body_size`, a cloud load balancer's
+request-size cap, or middleware such as `content-size-limit-asgi`) in
+front of it, a bare `uvicorn` process cannot reject an oversized request
+body before Starlette's own multipart parser has already accepted (and,
+for a large enough file, spooled to disk) it. PlateProof's own code
+(`plateproof/api/routes/documents.py`) still enforces the exact
+`documents_max_upload_bytes` ceiling with a bounded read afterward, but
+that check necessarily runs only once the file has already reached the
+application. **This gateway limit must also cover chunked-transfer
+requests (no `Content-Length` header)**, since PlateProof's own bounded
+read is the only in-app enforcement either way.
+
+The Streamlit page has its own, coarser, megabyte-granularity limit
+(`.streamlit/config.toml`'s `server.maxUploadSize`, kept at the smallest
+whole-megabyte value that is still >= `documents_max_upload_bytes`) as its
+own first-layer defense; it is not a substitute for a real reverse-proxy
+limit if the Streamlit app is itself directly internet-facing.
+
+**Each application process owns its own document worker pool.** A
+`multiprocessing` pool cannot be meaningfully shared across unrelated
+parent processes, so `documents_worker_pool_size` (default 2, ceiling 4)
+is a **per-process** limit, not a machine-wide one. Size deployment
+resources for the **combined** worst-case worker count:
+`(API processes + Streamlit processes) x documents_worker_pool_size`
+(multiplied again by replica count, if running more than one of either).
+There is no pure-Python way to enforce a true machine-wide ceiling across
+independent processes -- **OS/container memory and CPU limits are a
+required operational complement**, not optional hardening: each worker
+process renders full-page rasters (bounded by `documents_max_pixels_per_page`)
+and may load a RapidOCR/ONNX Runtime model, so provision each container/
+VM with enough memory for its own worst-case concurrent worker count,
+and CPU headroom for that many simultaneous OCR/PDFium calls.
+
+**Preview validation is structural, not a full decode.** Task 9A's
+preview validator (`plateproof/documents/worker/pool.py`) checks a
+generated preview PNG's entire container structure -- signature, chunk
+CRCs and ordering, declared dimensions -- using only `struct`/`zlib`; it
+does **not** fully decompress the image's pixel data. The Streamlit page
+renders previews via a `data:image/png;base64,...` URI passed to
+`st.image()`, which Streamlit's own code returns unmodified without ever
+invoking Pillow -- the actual pixel decode happens only in the viewer's
+own browser, never inside the Streamlit process itself. This is a
+deliberate, documented trust boundary (the standard one for any web app
+displaying an image), not a claim that the preview bytes are exhaustively
+proven safe to decode.
+
+**Windows note:** Streamlit's script runner replaces `sys.modules["__main__"]`
+with a bare module wrapping the *currently executing page script* on every
+rerun. On Windows, `multiprocessing`'s spawn bootstrap would otherwise try
+to reconstruct a spawned worker's `__main__` by re-executing that same
+page file, which crashes (no `ScriptRunContext` outside a real page run).
+`plateproof/documents/worker/pool.py` works around this by pointing
+`__main__` at its own, real, properly-specced module for the duration of
+`Process.start()` only, restoring whatever was there immediately
+afterward -- verified directly against a real `AppTest` run.
+
 ## Status
 
 Task 1 (project foundation), Task 2 (NYC ingestion), Task 3 (Florida
 ingestion), Task 4 (optional Michelin ingestion and auditable entity
 resolution), Task 5 (leakage-safe temporal features), Task 6 (calibrated
-jurisdiction risk models), Task 7 (FastAPI service and Streamlit MVP), and
+jurisdiction risk models), Task 7 (FastAPI service and Streamlit MVP),
 Task 8 (deterministic, evidence-grounded Copilot with optional local
-intent assistance) are implemented. Task 9 (owner document extraction) is
-reserved but not implemented -- its route returns an explicit `501`.
+intent assistance), and Task 9 (owner document extraction: an isolated
+worker-process core, the `POST /owners/documents/extract` route, and the
+Streamlit Document Reader page) are implemented.

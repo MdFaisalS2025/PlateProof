@@ -607,14 +607,10 @@ def test_model_card_never_exposes_artifact_path(
 # --------------------------------------------------------------------------- #
 
 # Task 8B implements POST /copilot/query for real -- see
-# tests/api/test_copilot_route.py for its behavior. It is no longer a
-# deferred 501 (test_owner_document_extract_returns_501 below still covers
-# the one route that remains deferred for Task 9).
-
-
-def test_owner_document_extract_returns_501(client: Any) -> None:
-    response = client.post("/owners/documents/extract", json={})
-    assert response.status_code == 501
+# tests/api/test_copilot_route.py for its behavior. Task 9B implements
+# POST /owners/documents/extract for real -- see
+# tests/api/test_documents_route.py for its behavior. No route remains
+# deferred as of Task 9B.
 
 
 def test_error_body_has_no_traceback_or_path(processed_dir: Path, make_client: Any) -> None:
