@@ -55,6 +55,17 @@ def test_document_reader_page_never_imports_native_parsers_directly() -> None:
     assert "PIL" not in import_source
 
 
+def test_document_reader_support_never_imports_native_parsers_or_streamlit() -> None:
+    """app/document_reader_support.py (Finding 3 correction of c60cc80) is
+    a plain, Streamlit-free module -- it must stay directly unit-testable
+    without a ScriptRunContext."""
+    import_source = _import_lines(_APP_DIR / "document_reader_support.py")
+    for forbidden in _FORBIDDEN_SUBSTRINGS:
+        assert forbidden not in import_source
+    assert "PIL" not in import_source
+    assert "streamlit" not in import_source
+
+
 def test_theme_module_never_imports_native_parsers_directly() -> None:
     import_source = _import_lines(_APP_DIR / "theme.py")
     for forbidden in _FORBIDDEN_SUBSTRINGS:

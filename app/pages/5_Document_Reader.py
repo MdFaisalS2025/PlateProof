@@ -44,14 +44,13 @@ from __future__ import annotations
 import base64
 import json
 import sys
-from dataclasses import asdict, is_dataclass
-from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from document_reader_support import build_downloadable_record  # noqa: E402
 from theme import (  # noqa: E402
     configure_page,
     document_worker_pool,
@@ -60,7 +59,7 @@ from theme import (  # noqa: E402
 )
 from theme import repository as get_repository  # noqa: E402
 
-from plateproof.documents.corrections import validate_correction  # noqa: E402
+from plateproof.documents.corrections import validate_corrections  # noqa: E402
 from plateproof.documents.florida_extractor import FLORIDA_LABELS  # noqa: E402
 from plateproof.documents.models import ExtractionDraft  # noqa: E402
 from plateproof.documents.nyc_extractor import NYC_LABELS  # noqa: E402
@@ -124,46 +123,6 @@ def _preview_data_uri(preview_png: bytes) -> str:
     ``PIL.Image.open`` (see module docstring)."""
     encoded = base64.b64encode(preview_png).decode("ascii")
     return f"data:image/png;base64,{encoded}"
-
-
-def _asdict_json_safe(value: Any) -> Any:
-    if is_dataclass(value) and not isinstance(value, type):
-        return {k: _asdict_json_safe(v) for k, v in asdict(value).items()}
-    if isinstance(value, dict):
-        return {k: _asdict_json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_asdict_json_safe(v) for v in value]
-    if isinstance(value, bytes):
-        # Never included: PageMetadata.preview_png is deliberately dropped
-        # from the downloadable artifact (it is a display aid, not part of
-        # the user-submitted record).
-        return None
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return value
-
-
-def _build_downloadable_record(
-    draft: ExtractionDraft, corrections: dict[str, str]
-) -> dict[str, Any]:
-    machine_candidates = {
-        name: {
-            "value": _asdict_json_safe(candidate.value),
-            "display_value": candidate.display_value,
-            "confidence_label": candidate.confidence_label,
-        }
-        for name, candidate in draft.candidates.items()
-    }
-    return {
-        "restaurant_id": draft.restaurant_id,
-        "jurisdiction": draft.jurisdiction_expected,
-        "confirmed_at": datetime.now(UTC).isoformat(),
-        "machine_candidates": machine_candidates,
-        "user_corrections": dict(corrections),
-        "violations": [_asdict_json_safe(v) for v in draft.violations],
-        "record_status": "user_submitted",
-        "disclaimer": USER_SUBMITTED_RECORD_DISCLAIMER,
-    }
 
 
 configure_page("Document Reader")
@@ -458,14 +417,22 @@ if draft is not None:
                         caption=f"Page {page.page_number}",
                     )
 
-        # --- Validate every correction through the Task 9A validator ---- #
-        invalid_correction_fields: list[str] = []
-        for field_name, raw_value in corrections.items():
-            validated, reason = validate_correction(field_name, raw_value, draft)
-            if reason is not None or (validated is not None and validated.parse_status != "parsed"):
-                invalid_correction_fields.append(field_name)
-        if invalid_correction_fields:
-            st.error(f"Invalid corrections for: {', '.join(invalid_correction_fields)}")
+        # --- Validate the COMPLETE corrections mapping every rerun, via  #
+        # the same batch validator (aggregate-size limit included) Task   #
+        # 9A's own confirmation workflow uses -- never a per-field loop   #
+        # that could never notice the total payload size at all.         #
+        validated_corrections, batch_rejection_reason = validate_corrections(corrections, draft)
+        if batch_rejection_reason is not None:
+            st.error(f"Corrections could not be validated: {batch_rejection_reason}")
+            invalid_correction_fields = list(corrections.keys())
+        else:
+            invalid_correction_fields = [
+                field_name
+                for field_name, validated in validated_corrections.items()
+                if validated.parse_status != "parsed"
+            ]
+            if invalid_correction_fields:
+                st.error(f"Invalid corrections for: {', '.join(invalid_correction_fields)}")
 
         blocking_reasons: list[str] = []
         if draft.jurisdiction_mismatch:
@@ -474,7 +441,9 @@ if draft is not None:
             blocking_reasons.append("missing required fields")
         if unresolved_violations:
             blocking_reasons.append("unresolved violation codes")
-        if invalid_correction_fields:
+        if batch_rejection_reason is not None:
+            blocking_reasons.append("corrections could not be validated")
+        elif invalid_correction_fields:
             blocking_reasons.append("invalid corrections")
         if draft.processing_status == "ocr_unavailable":
             blocking_reasons.append("OCR unavailable")
@@ -494,10 +463,13 @@ if draft is not None:
             disabled=bool(blocking_reasons),
         )
         if confirmed and not blocking_reasons:
-            record = _build_downloadable_record(draft, corrections)
+            # validated_corrections is guaranteed non-empty-safe here: no
+            # blocking_reasons means batch_rejection_reason was None and
+            # every field's parse_status was "parsed".
+            record = build_downloadable_record(draft, validated_corrections)
             st.download_button(
                 "Download my submitted record (JSON)",
-                data=json.dumps(record, indent=2),
+                data=json.dumps(record, indent=2, sort_keys=True),
                 file_name=f"plateproof_document_record_{draft.draft_id}.json",
                 mime="application/json",
             )

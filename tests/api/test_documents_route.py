@@ -200,8 +200,10 @@ def test_successful_extraction_returns_completed_draft(
 def test_jurisdiction_is_never_accepted_from_the_client(
     documents_app: Any, write_restaurants: Any, restaurant_row: Any
 ) -> None:
-    """Even if a client sends a jurisdiction field, it has no effect --
-    the route only ever reads restaurant_id and file from the form."""
+    """The route only ever recognizes restaurant_id and file -- a client
+    attempting to also send a jurisdiction field is rejected outright
+    (422, unexpected field) rather than having the extra field silently
+    ignored while the rest of the request proceeds."""
     _write_restaurant(write_restaurants, restaurant_row, jurisdiction="nyc")
     client = documents_app()
     files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
@@ -210,8 +212,7 @@ def test_jurisdiction_is_never_accepted_from_the_client(
         data={"restaurant_id": "nyc:1", "jurisdiction": "florida"},
         files=files,
     )
-    assert response.status_code == 200
-    assert response.json()["jurisdiction_expected"] == "nyc"
+    assert response.status_code == 422
 
 
 def test_unknown_restaurant_returns_404(documents_app: Any) -> None:
@@ -250,6 +251,128 @@ def test_two_file_parts_rejected_with_413(
         ],
     )
     assert response.status_code == 413
+
+
+def test_duplicate_restaurant_id_field_rejected_with_422(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    """Two values for restaurant_id fits under Starlette's own
+    max_fields=2 budget (2 non-file fields), so only the route's own
+    exact-shape validation can catch it."""
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": ["nyc:1", "nyc:1"]},
+        files=files,
+    )
+    assert response.status_code == 422
+
+
+def test_unexpected_form_field_rejected_with_422(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    """restaurant_id + an unexpected extra non-file field is exactly 2
+    non-file fields -- within Starlette's own max_fields=2 budget -- so
+    only the route's own allowlist can catch it."""
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": "nyc:1", "notes": "please process quickly"},
+        files=files,
+    )
+    assert response.status_code == 422
+
+
+def test_second_file_under_a_different_field_name_rejected_with_413(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": "nyc:1"},
+        files=[
+            ("file", ("a.pdf", io.BytesIO(_minimal_pdf("a")), "application/pdf")),
+            ("attachment", ("b.pdf", io.BytesIO(_minimal_pdf("b")), "application/pdf")),
+        ],
+    )
+    assert response.status_code == 413
+
+
+def test_upload_file_is_closed_after_duplicate_restaurant_id(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any, monkeypatch: Any
+) -> None:
+    from starlette.datastructures import UploadFile
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    close_calls: list[int] = []
+    original_close = UploadFile.close
+
+    async def _tracked_close(self: Any) -> None:
+        close_calls.append(1)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "close", _tracked_close)
+    files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": ["nyc:1", "nyc:1"]},
+        files=files,
+    )
+    assert response.status_code == 422
+    assert close_calls == [1]
+
+
+def test_upload_file_is_closed_after_unexpected_field(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any, monkeypatch: Any
+) -> None:
+    from starlette.datastructures import UploadFile
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    close_calls: list[int] = []
+    original_close = UploadFile.close
+
+    async def _tracked_close(self: Any) -> None:
+        close_calls.append(1)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "close", _tracked_close)
+    files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": "nyc:1", "notes": "x"},
+        files=files,
+    )
+    assert response.status_code == 422
+    assert close_calls == [1]
+
+
+def test_upload_file_is_closed_after_oversized_restaurant_id(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any, monkeypatch: Any
+) -> None:
+    from starlette.datastructures import UploadFile
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    close_calls: list[int] = []
+    original_close = UploadFile.close
+
+    async def _tracked_close(self: Any) -> None:
+        close_calls.append(1)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "close", _tracked_close)
+    response = _post_document(
+        client, restaurant_id="nyc:" + "x" * 200, data=_minimal_pdf("Score: 14")
+    )
+    assert response.status_code == 413
+    assert close_calls == [1]
 
 
 def test_oversized_restaurant_id_rejected_with_413(
@@ -426,3 +549,162 @@ def test_uvicorn_has_no_request_body_size_option(documents_app: Any) -> None:
 
     config_fields = {f for f in dir(uvicorn.config.Config) if not f.startswith("_")}
     assert not any("body" in f.lower() and "size" in f.lower() for f in config_fields)
+
+
+# --------------------------------------------------------------------------- #
+# Finding 1: the event loop must not block for the duration of extraction.   #
+# --------------------------------------------------------------------------- #
+
+
+def _slow_worker(conn: Any) -> None:
+    """Sleeps well within the worker pool's own generous timeout, then
+    responds normally -- simulates a real document taking real wall-clock
+    time to process without ever actually timing out."""
+    import time
+
+    from plateproof.documents.worker.protocol import (
+        ProtocolViolationError,
+        recv_bytes_frame,
+        recv_frame,
+        send_frame,
+    )
+
+    while True:
+        try:
+            recv_frame(conn)
+            recv_bytes_frame(conn, max_length=64_000_000)
+        except ProtocolViolationError:
+            return
+        time.sleep(3.0)
+        send_frame(
+            conn,
+            {
+                "protocol_version": 1,
+                "message_type": "job_response",
+                "ocr_available": False,
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "width_px": 200,
+                        "height_px": 200,
+                        "used_ocr": False,
+                        "ocr_attempted": False,
+                        "text_blocks": [],
+                    }
+                ],
+            },
+        )
+
+
+def test_slow_extraction_does_not_block_concurrent_requests(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    """While one extraction is waiting on a slow (but not timed-out)
+    worker, a completely unrelated /health request must still complete
+    promptly -- proving the synchronous extract_document(...) call does
+    not run on, and block, the shared event loop.
+
+    Uses ``httpx.AsyncClient`` over ``ASGITransport`` with both requests
+    issued as concurrent tasks on ONE shared asyncio event loop --
+    ``TestClient`` (the sync fixture used elsewhere in this file) gives
+    each request its own fresh portal/event-loop thread
+    (``starlette.testclient.TestClient._portal_factory``), which would
+    never reproduce this bug regardless of whether the route actually
+    blocks the loop."""
+    import asyncio
+    import time
+
+    from httpx import ASGITransport, AsyncClient
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app(worker_main=_slow_worker)
+
+    async def _run() -> tuple[float, float, Any, Any]:
+        transport = ASGITransport(app=client.app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+            files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+            extraction_task = asyncio.ensure_future(
+                async_client.post(
+                    "/owners/documents/extract",
+                    data={"restaurant_id": "nyc:1"},
+                    files=files,
+                )
+            )
+            # A plain asyncio timer on the SAME event loop as the
+            # extraction task: if that task ever runs a blocking
+            # synchronous call with no `await` inside it, the entire loop
+            # freezes and even THIS unrelated sleep(0.3) will not return
+            # anywhere near on time -- it will instead return only once
+            # the blocking call finally finishes (here, ~3s later). This
+            # is a more reliable signal than checking extraction_task.done()
+            # immediately afterward, since that check would also be
+            # delayed by the very same starvation it's trying to detect.
+            sleep_started = time.monotonic()
+            await asyncio.sleep(0.3)
+            sleep_elapsed = time.monotonic() - sleep_started
+
+            health_started = time.monotonic()
+            health_response = await async_client.get("/health")
+            health_elapsed = time.monotonic() - health_started
+
+            extraction_response = await extraction_task
+            return sleep_elapsed, health_elapsed, health_response, extraction_response
+
+    sleep_elapsed, health_elapsed, health_response, extraction_response = asyncio.run(_run())
+
+    assert sleep_elapsed < 1.0, (
+        f"an unrelated asyncio.sleep(0.3) took {sleep_elapsed:.2f}s to return while an "
+        "extraction was in progress on the same event loop -- the loop was blocked"
+    )
+    assert health_response.status_code == 200
+    assert health_elapsed < 1.5, (
+        f"/health took {health_elapsed:.2f}s while an unrelated extraction was in "
+        "progress on the same event loop -- the loop was blocked"
+    )
+    assert extraction_response.status_code == 200
+    assert extraction_response.json()["processing_status"] == "completed"
+
+
+def test_disconnect_during_extraction_still_closes_the_upload_file(
+    documents_app: Any, write_restaurants: Any, monkeypatch: Any, restaurant_row: Any
+) -> None:
+    """A cancelled/disconnected request must not leave the parsed
+    UploadFile open just because extraction was still running in a
+    background thread -- the route's own finally block must still run
+    promptly on cancellation (never claims this stops the worker process
+    itself; the worker pool's own timeouts remain authoritative)."""
+    import asyncio
+
+    from httpx import ASGITransport, AsyncClient
+    from starlette.datastructures import UploadFile
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app(worker_main=_slow_worker)
+
+    close_calls: list[int] = []
+    original_close = UploadFile.close
+
+    async def _tracked_close(self: Any) -> None:
+        close_calls.append(1)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "close", _tracked_close)
+
+    async def _run() -> None:
+        transport = ASGITransport(app=client.app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+            files = {"file": ("doc.pdf", io.BytesIO(_minimal_pdf("Score: 14")), "application/pdf")}
+            task = asyncio.ensure_future(
+                async_client.post(
+                    "/owners/documents/extract",
+                    data={"restaurant_id": "nyc:1"},
+                    files=files,
+                )
+            )
+            await asyncio.sleep(0.3)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(_run())
+    assert close_calls == [1]

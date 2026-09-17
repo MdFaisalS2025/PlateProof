@@ -438,3 +438,80 @@ def test_page_never_imports_native_parsers_or_decoders(app_path: Any) -> None:
     # a data: URI string, never bytes -- so the module itself is never
     # imported by this page's own source at all.
     assert "PIL" not in import_source
+
+
+# --------------------------------------------------------------------------- #
+# Finding 3 (independent review of c60cc80): the aggregate correction-       #
+# payload limit must be enforced via validate_corrections(), not just a     #
+# per-field loop -- and confirmation must block on it.                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_aggregate_correction_payload_overflow_blocks_confirmation(
+    app_env: Any,
+    app_path: Any,
+    write_restaurants: Any,
+    restaurant_row: Any,
+    fake_pool: Any,
+) -> None:
+    """Many individually-small correction values whose TOTAL length
+    exceeds plateproof.documents.corrections.MAX_TOTAL_CORRECTION_PAYLOAD_LENGTH
+    must block confirmation -- proving the page validates the complete
+    corrections mapping with validate_corrections() (which enforces this
+    aggregate limit), not a per-field loop that never sums anything."""
+    from streamlit.testing.v1 import AppTest
+
+    from plateproof.documents.corrections import MAX_TOTAL_CORRECTION_PAYLOAD_LENGTH
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    fake_pool()
+    at = AppTest.from_file(app_path("pages", "5_Document_Reader.py"))
+    at.run(timeout=30)
+    _select_restaurant(at, "nyc:1")
+    _upload_and_run(at, _minimal_pdf("Score: 14"))
+    assert at.session_state["doc_draft"] is not None
+
+    # Individually well under the 500-char per-field cap, but the sum
+    # across many fields exceeds the aggregate payload limit. Uses
+    # otherwise-unknown field names so the ONLY way confirmation can be
+    # blocked is the aggregate-size check specifically -- a per-field-only
+    # validation loop (which never sums anything) would instead report
+    # each field as an unrecognized correction field, a completely
+    # different failure reason from a genuinely-enforced aggregate limit.
+    field_value = "x" * 400
+    field_count = (MAX_TOTAL_CORRECTION_PAYLOAD_LENGTH // len(field_value)) + 5
+    at.session_state["doc_corrections"] = {
+        f"synthetic_field_{i}": field_value for i in range(field_count)
+    }
+    at.run(timeout=30)
+
+    checkbox = at.checkbox(key="doc_confirm_checkbox")
+    assert checkbox.disabled is True
+    error_text = "\n".join(m.value for m in at.error)
+    assert "exceeds the maximum allowed size" in error_text
+
+
+def test_invalid_numeric_correction_blocks_confirmation(
+    app_env: Any,
+    app_path: Any,
+    write_restaurants: Any,
+    restaurant_row: Any,
+    fake_pool: Any,
+) -> None:
+    """A non-finite numeric correction (e.g. "nan") for the score field
+    parses as a float via Python's own float("nan") but must be rejected
+    -- confirmation must stay blocked."""
+    from streamlit.testing.v1 import AppTest
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    fake_pool()
+    at = AppTest.from_file(app_path("pages", "5_Document_Reader.py"))
+    at.run(timeout=30)
+    _select_restaurant(at, "nyc:1")
+    _upload_and_run(at, _minimal_pdf("Score: 14"))
+    assert at.session_state["doc_draft"] is not None
+
+    at.text_input(key="doc_correction_score").set_value("nan").run(timeout=30)
+
+    checkbox = at.checkbox(key="doc_confirm_checkbox")
+    assert checkbox.disabled is True
