@@ -97,6 +97,18 @@ _NYC_SOURCE_URL = "https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Rest
 _FLORIDA_SOURCE_URL = "https://www2.myfloridalicense.com/hotels-restaurants/public-records/"
 
 
+#: Task 11: the spec's Privacy-and-safety section requires "a correction/
+#: contact path" alongside the official-source link. PlateProof mirrors
+#: public government records it does not control and operates no support
+#: inbox of its own -- the honest, implementable correction path is the
+#: issuing agency's own record, not an invented PlateProof-run intake.
+DATA_CORRECTION_NOTE = (
+    "To correct or dispute this record, contact the issuing government agency directly "
+    "-- use the official source link above. PlateProof mirrors public records and "
+    "cannot change them."
+)
+
+
 def official_source_link(jurisdiction: Jurisdiction) -> str:
     """The fixed official dataset landing page for a jurisdiction. Never
     constructed from a database row's own value -- both URLs are hardcoded

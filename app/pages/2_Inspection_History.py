@@ -144,8 +144,9 @@ if history:
 
 # 6. Where can the user verify the official record? ---------------------------
 st.subheader("Verify the official record")
-from plateproof.serving.display import official_source_link  # noqa: E402
+from plateproof.serving.display import DATA_CORRECTION_NOTE, official_source_link  # noqa: E402
 
 st.markdown(f"[Official {jurisdiction.upper()} dataset]({official_source_link(jurisdiction)})")
+st.caption(DATA_CORRECTION_NOTE)
 
 render_independence_footer()

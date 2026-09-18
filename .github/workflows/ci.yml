@@ -1,0 +1,46 @@
+name: CI
+
+# GitHub Actions is free for this workflow's needs -- public repositories get
+# unlimited minutes on standard runners at no cost, and private repositories
+# get a monthly free-minutes allowance with no credit card required to enable
+# it. This workflow never installs or calls a paid service: every dependency
+# in pyproject.toml is free/local (see its own inline comments), the test
+# suite injects fake HTTP openers for the NYC/Florida download code instead
+# of making real network calls (tests/ingestion/test_download_nyc.py,
+# tests/ingestion/test_download_florida.py), and Google/local-AI integration
+# stay at their default-disabled settings for the whole run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlateProof (dev extras)
+        run: python -m pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: python -m ruff check .
+
+      - name: Ruff format check
+        run: python -m ruff format --check .
+
+      - name: mypy
+        run: python -m mypy plateproof scripts
+
+      - name: pytest with coverage
+        run: python -m pytest --cov=plateproof --cov-report=term-missing

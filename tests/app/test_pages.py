@@ -109,6 +109,34 @@ def test_inspection_history_page_shows_nyc_native_fields(
     assert "Grade" in body_text
 
 
+def test_inspection_history_page_shows_a_correction_contact_path(
+    app_env: Any,
+    app_path: Any,
+    write_restaurants: Any,
+    write_inspections: Any,
+    restaurant_row: Any,
+    inspection_row: Any,
+) -> None:
+    """Spec's Privacy-and-safety section requires "a correction/contact
+    path" alongside the official-source link -- PlateProof doesn't operate
+    its own record-correction intake, so this points to the same official
+    agency link already shown, rather than inventing unsupported
+    infrastructure."""
+    from streamlit.testing.v1 import AppTest
+
+    write_restaurants([restaurant_row(restaurant_id="nyc:1")])
+    write_inspections([inspection_row()])
+    at = AppTest.from_file(app_path("pages", "2_Inspection_History.py"))
+    at.run(timeout=30)
+    at.text_input[0].set_value("nyc:1").run(timeout=30)
+    assert not at.exception
+    body_text = "\n".join(m.value for m in at.markdown)
+    caption_text = "\n".join(c.value for c in at.caption)
+    lowered = caption_text.lower()
+    assert "correct" in lowered or "dispute" in lowered
+    assert "data.cityofnewyork.us" in body_text
+
+
 def test_model_card_page_smoke_no_model_configured(app_env: Any, app_path: Any) -> None:
     from streamlit.testing.v1 import AppTest
 

@@ -1,7 +1,8 @@
-.env
 .venv/
+.git/
+.github/
 __pycache__/
-*.py[cod]
+*.pyc
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -19,8 +20,7 @@ data/processed/*
 !data/processed/.gitkeep
 models/*
 !models/.gitkeep
-mlruns/
-.streamlit/secrets.toml
-*.log
-.DS_Store
-Thumbs.db
+tests/
+docs/
+.claude/
+.env

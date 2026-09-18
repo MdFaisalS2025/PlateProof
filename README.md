@@ -268,6 +268,24 @@ disabled (the default) -- see `plateproof/serving/display.py`'s
 `google_maps_search_link`/`GOOGLE_SEARCH_LINK_ATTRIBUTION` and
 `plateproof/api/routes/restaurants.py`.
 
+## Release verification and deployment
+
+Task 11's release-readiness audit is recorded in full in `reports/model_card.md`
+(project-level modeling methodology and what was verified live vs. by the automated
+suite) and `docs/deployment.md` (what actually runs today -- a local release, verified
+live end-to-end -- and the hosting research behind why no public deployment was made).
+In short: **PlateProof is a verified local-only release.** No cloud account was
+created, no paid service was activated, and nothing was deployed publicly -- current
+Google Maps Platform terms and Hugging Face Spaces policy both require a paid plan
+before hosting compute at all, and the one genuinely free option found (Streamlit
+Community Cloud) cannot run the FastAPI service and is a poor fit for Task 9's
+memory/process-isolation needs; see `docs/deployment.md` for the full comparison and
+what it would take to change this decision. `.github/workflows/ci.yml` runs the full
+quality suite (Ruff, mypy, pytest with coverage) on every push, using GitHub Actions'
+own no-credit-card-required free tier. A `Dockerfile` is included for anyone who wants
+to run PlateProof in a container on their own machine -- see `docs/deployment.md`
+before doing more than that with it.
+
 ## Status
 
 Task 1 (project foundation), Task 2 (NYC ingestion), Task 3 (Florida
@@ -277,6 +295,7 @@ jurisdiction risk models), Task 7 (FastAPI service and Streamlit MVP),
 Task 8 (deterministic, evidence-grounded Copilot with optional local
 intent assistance), Task 9 (owner document extraction: an isolated
 worker-process core, the `POST /owners/documents/extract` route, and the
-Streamlit Document Reader page), and Task 10 (optional, link-only Google
-Maps integration -- no API key, billing account, or OAuth) are
-implemented.
+Streamlit Document Reader page), Task 10 (optional, link-only Google
+Maps integration -- no API key, billing account, or OAuth), and Task 11
+(release-readiness audit, CI, and local-only deployment documentation)
+are implemented.
