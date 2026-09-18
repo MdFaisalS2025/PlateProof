@@ -7,6 +7,7 @@ reimplements them independently.
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import quote
 
 Jurisdiction = Literal["nyc", "florida"]
 
@@ -33,6 +34,55 @@ DOCUMENT_PRIVACY_NOTICE = (
     "your own extracted data; PlateProof does not persist your upload, and no uploaded "
     "content is ever used to train or update PlateProof's prediction models."
 )
+
+#: Task 10: shown directly beside a constructed Google Maps search link.
+#: Deliberately states three things in one place: (1) the link is a
+#: *search query* PlateProof built from its own already-known data, not a
+#: Google-verified match -- the user must confirm the result themselves;
+#: (2) PlateProof's server never contacts Google -- opening the link sends
+#: the query to Google from the user's OWN browser, a client-side action
+#: PlateProof does not perform on anyone's behalf; (3) PlateProof remains
+#: independent of and not affiliated with Google, matching the same
+#: non-affiliation framing already used for Michelin/NYC/Florida elsewhere
+#: in this module.
+GOOGLE_SEARCH_LINK_ATTRIBUTION = (
+    "This is a Google Maps search built from PlateProof's own restaurant data, not a "
+    "Google-verified match -- please confirm it's the right result yourself. Opening it "
+    "sends the search from your browser to Google; PlateProof's server never contacts "
+    "Google. PlateProof is independent and not affiliated with or endorsed by Google."
+)
+
+#: Google's own documented ceiling for Maps URLs: "URLs are limited to
+#: 2,048 characters for each request." A query that would exceed this is
+#: refused outright (returns None) rather than truncated -- a truncated
+#: name/address could silently become a different, misleading query.
+GOOGLE_MAPS_URL_MAX_LENGTH = 2048
+
+_GOOGLE_MAPS_SEARCH_BASE = "https://www.google.com/maps/search/?api=1&query="
+
+
+def google_maps_search_link(
+    *, name: str, address: str | None, city: str | None, region: str | None
+) -> str | None:
+    """A plain Google Maps URL (``developers.google.com/maps/documentation/urls``)
+    built entirely from data PlateProof already has -- no API key, no
+    billing account, no network call PlateProof itself makes. Returns
+    ``None`` for a blank/whitespace-only name (never guesses a fallback
+    query) and for a query that would exceed Google's documented 2,048-
+    character URL ceiling (refused, never truncated -- see
+    :data:`GOOGLE_MAPS_URL_MAX_LENGTH`)."""
+    if not name or not name.strip():
+        return None
+    parts = [name.strip()]
+    for part in (address, city, region):
+        if part and part.strip():
+            parts.append(part.strip())
+    query = ", ".join(parts)
+    url = _GOOGLE_MAPS_SEARCH_BASE + quote(query, safe="")
+    if len(url) > GOOGLE_MAPS_URL_MAX_LENGTH:
+        return None
+    return url
+
 
 USER_SUBMITTED_RECORD_DISCLAIMER = (
     "This is a user-submitted record produced from a machine-assisted extraction of an "

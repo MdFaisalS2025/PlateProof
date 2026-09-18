@@ -241,6 +241,33 @@ page file, which crashes (no `ScriptRunContext` outside a real page run).
 `Process.start()` only, restoring whatever was there immediately
 afterward -- verified directly against a real `AppTest` run.
 
+## Google integration (optional, link-only)
+
+Google's Places API requires a billing-enabled Cloud project -- and therefore a credit
+card on file -- before a single request can be made, even to stay within its free usage
+thresholds (verified directly against
+[Google's own "Get started" docs](https://developers.google.com/maps/get-started) and
+[Cloud Billing's payment-method requirements](https://docs.cloud.google.com/billing/docs/how-to/payment-methods)).
+The Business Profile API has no card requirement, but is gated behind a discretionary
+Google approval process this project has no realistic path through, and is scoped to an
+individually-OAuth'd, Google-verified owner -- something PlateProof has no
+authentication system to support yet. Both are therefore out of scope; see
+`docs/PlateProof_Implementation_Specification.md`'s Task 10 entry and the planning
+record for the full comparison.
+
+What PlateProof implements instead, set `PLATEPROOF_GOOGLE_INTEGRATION_ENABLED=true` to
+enable: a plain
+[Google Maps URL](https://developers.google.com/maps/documentation/urls/get-started)
+("You don't need a Google API key to use Maps URLs.") built from a restaurant's own
+already-known name/address, shown as a "View on Google Maps" link on the restaurant
+search page. **This is a constructed search query, not a Google-verified match** --
+PlateProof's server never contacts Google; opening the link sends the query to Google
+from the *user's own browser*. No API key, billing account, OAuth flow, Place ID lookup,
+or cached Google content is ever involved. The application runs identically with this
+disabled (the default) -- see `plateproof/serving/display.py`'s
+`google_maps_search_link`/`GOOGLE_SEARCH_LINK_ATTRIBUTION` and
+`plateproof/api/routes/restaurants.py`.
+
 ## Status
 
 Task 1 (project foundation), Task 2 (NYC ingestion), Task 3 (Florida
@@ -248,6 +275,8 @@ ingestion), Task 4 (optional Michelin ingestion and auditable entity
 resolution), Task 5 (leakage-safe temporal features), Task 6 (calibrated
 jurisdiction risk models), Task 7 (FastAPI service and Streamlit MVP),
 Task 8 (deterministic, evidence-grounded Copilot with optional local
-intent assistance), and Task 9 (owner document extraction: an isolated
+intent assistance), Task 9 (owner document extraction: an isolated
 worker-process core, the `POST /owners/documents/extract` route, and the
-Streamlit Document Reader page) are implemented.
+Streamlit Document Reader page), and Task 10 (optional, link-only Google
+Maps integration -- no API key, billing account, or OAuth) are
+implemented.

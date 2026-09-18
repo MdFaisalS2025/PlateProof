@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from plateproof.api.dependencies import get_repository
+from plateproof.api.dependencies import get_app_settings, get_repository
 from plateproof.api.schemas import (
     InspectionHistoryItem,
     MichelinDistinctionItem,
@@ -16,8 +16,11 @@ from plateproof.api.schemas import (
     RestaurantSummary,
     ViolationHistoryItem,
 )
+from plateproof.core.config import Settings
 from plateproof.serving.display import (
+    GOOGLE_SEARCH_LINK_ATTRIBUTION,
     MICHELIN_CONTEXT_NOTE,
+    google_maps_search_link,
     latest_documented_distinctions,
     official_source_link,
 )
@@ -80,18 +83,37 @@ def search_restaurants(
 
 @router.get("/restaurants/{restaurant_id}", response_model=RestaurantDetail)
 def get_restaurant_detail(
-    restaurant_id: str, repository: Repository = Depends(get_repository)
+    restaurant_id: str,
+    repository: Repository = Depends(get_repository),
+    settings: Settings = Depends(get_app_settings),
 ) -> RestaurantDetail:
     row = repository.get_restaurant(restaurant_id)
     if row is None:
         raise RestaurantNotFoundError(restaurant_id)
     history = repository.michelin_history(restaurant_id)
     summary = _to_summary(repository, row)
+
+    # Task 10: a constructed Google Maps search link, never a Google API
+    # call -- see plateproof.serving.display.google_maps_search_link. Both
+    # fields stay None when the flag is off (the default) or when no
+    # usable link could be built, so the response shape is identical
+    # either way (only the values differ).
+    google_search_link: str | None = None
+    google_attribution: str | None = None
+    if settings.google_integration_enabled:
+        google_search_link = google_maps_search_link(
+            name=summary.name, address=summary.address, city=summary.city, region=summary.region
+        )
+        if google_search_link is not None:
+            google_attribution = GOOGLE_SEARCH_LINK_ATTRIBUTION
+
     return RestaurantDetail(
         restaurant=summary,
         official_source_links=[official_source_link(row["jurisdiction"])],
         michelin_history=[MichelinDistinctionItem(**item) for item in history],
         michelin_context_note=MICHELIN_CONTEXT_NOTE if history else None,
+        google_search_link=google_search_link,
+        google_attribution=google_attribution,
     )
 
 

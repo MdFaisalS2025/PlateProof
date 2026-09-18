@@ -199,6 +199,102 @@ def test_michelin_accept_only_and_review_hidden(
 
 
 # --------------------------------------------------------------------------- #
+# Task 10: link-only Google integration                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_google_fields_are_null_when_integration_disabled(
+    processed_dir: Path, write_restaurants: Any, restaurant_row: Any, make_client: Any
+) -> None:
+    """Disabled is the default -- the response still carries the two new
+    keys (an honest, forward-compatible schema shape), just null-valued.
+    This is not the same response as before Task 10 existed; it is the same
+    *values* for every field Task 9 already returned."""
+    write_restaurants([restaurant_row()])
+    client = make_client(processed_data_dir=processed_dir)
+    response = client.get("/restaurants/nyc:1")
+    assert response.status_code == 200
+    body = response.json()
+    assert "google_search_link" in body
+    assert "google_attribution" in body
+    assert body["google_search_link"] is None
+    assert body["google_attribution"] is None
+
+
+def test_google_search_link_present_when_integration_enabled(
+    processed_dir: Path, write_restaurants: Any, restaurant_row: Any, make_client: Any
+) -> None:
+    write_restaurants([restaurant_row()])
+    client = make_client(processed_data_dir=processed_dir, google_integration_enabled=True)
+    response = client.get("/restaurants/nyc:1")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["google_search_link"] is not None
+    assert body["google_search_link"].startswith("https://www.google.com/maps/search/?api=1&query=")
+    assert "Anna" in body["google_search_link"]
+    assert body["google_attribution"] is not None
+    lowered = body["google_attribution"].lower()
+    assert "confirm" in lowered
+    assert "not affiliated" in lowered or "independent" in lowered
+
+
+def test_google_link_omitted_when_restaurant_has_no_name(
+    processed_dir: Path, write_restaurants: Any, restaurant_row: Any, make_client: Any
+) -> None:
+    """Enabled, but the link/attribution still degrade to null rather than
+    ever emitting a broken or misleading link -- proven end-to-end through
+    the route, not just at the pure-function level."""
+    write_restaurants([restaurant_row(name="")])
+    client = make_client(processed_data_dir=processed_dir, google_integration_enabled=True)
+    response = client.get("/restaurants/nyc:1")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["google_search_link"] is None
+    assert body["google_attribution"] is None
+
+
+def test_complete_application_works_with_google_disabled(
+    processed_dir: Path,
+    write_restaurants: Any,
+    write_inspections: Any,
+    restaurant_row: Any,
+    inspection_row: Any,
+    make_client: Any,
+) -> None:
+    """Explicit end-to-end coverage of the spec's own Task 10 checklist
+    item: with Google integration left at its default (disabled), every
+    other route continues to work exactly as it did before Task 10."""
+    write_restaurants([restaurant_row()])
+    write_inspections([inspection_row()])
+    client = make_client(processed_data_dir=processed_dir)
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/restaurants", params={"query": "anna"}).status_code == 200
+    detail = client.get("/restaurants/nyc:1")
+    assert detail.status_code == 200
+    assert detail.json()["google_search_link"] is None
+    assert client.get("/restaurants/nyc:1/inspections").status_code == 200
+    assert client.get("/restaurants/nyc:1/violations").status_code == 200
+
+
+def test_health_google_status_reflects_link_feature_flag(
+    processed_dir: Path, write_restaurants: Any, restaurant_row: Any, make_client: Any
+) -> None:
+    write_restaurants([restaurant_row()])
+    disabled_client = make_client(processed_data_dir=processed_dir)
+    enabled_client = make_client(processed_data_dir=processed_dir, google_integration_enabled=True)
+
+    disabled_google = next(
+        c for c in disabled_client.get("/health").json()["components"] if c["name"] == "google"
+    )
+    enabled_google = next(
+        c for c in enabled_client.get("/health").json()["components"] if c["name"] == "google"
+    )
+    assert disabled_google["status"] == "disabled"
+    assert enabled_google["status"] == "ok"
+
+
+# --------------------------------------------------------------------------- #
 # Restaurant detail / inspections / violations                                #
 # --------------------------------------------------------------------------- #
 

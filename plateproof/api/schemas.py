@@ -127,6 +127,13 @@ class RestaurantDetail(BaseModel):
     official_source_links: list[str]
     michelin_history: list[MichelinDistinctionItem]
     michelin_context_note: str | None = None
+    #: Task 10: a constructed Google Maps search link, present only when
+    #: ``Settings.google_integration_enabled`` is true and a link could be
+    #: built (a blank name, or a query too long for Google's own URL
+    #: length ceiling, yields None even when enabled). Never a Google
+    #: API response and never a verified match -- see google_attribution.
+    google_search_link: str | None = None
+    google_attribution: str | None = None
 
 
 class PredictionAvailable(BaseModel):

@@ -36,6 +36,39 @@ def test_search_page_shows_results(
     assert "Anna's Kitchen" in body_text
 
 
+def test_search_page_omits_google_link_when_integration_disabled(
+    app_env: Any, app_path: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    """Disabled is the default -- app_env() with no overrides."""
+    from streamlit.testing.v1 import AppTest
+
+    write_restaurants([restaurant_row(restaurant_id="nyc:1", name="Anna's Kitchen")])
+    at = AppTest.from_file(app_path("pages", "1_Restaurant_Search.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    body_text = "\n".join(m.value for m in at.markdown)
+    assert "View on Google Maps" not in body_text
+
+
+def test_search_page_shows_google_link_when_integration_enabled(
+    app_env: Any, app_path: Any, write_restaurants: Any, restaurant_row: Any
+) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    app_env(google_integration_enabled="true")
+    write_restaurants([restaurant_row(restaurant_id="nyc:1", name="Anna's Kitchen")])
+    at = AppTest.from_file(app_path("pages", "1_Restaurant_Search.py"))
+    at.run(timeout=30)
+    assert not at.exception
+    body_text = "\n".join(m.value for m in at.markdown)
+    assert "View on Google Maps" in body_text
+    assert "google.com/maps/search" in body_text
+    caption_text = "\n".join(c.value for c in at.caption)
+    lowered = caption_text.lower()
+    assert "confirm" in lowered
+    assert "not affiliated" in lowered or "independent" in lowered
+
+
 def test_inspection_history_page_smoke_without_restaurant_id(app_env: Any, app_path: Any) -> None:
     from streamlit.testing.v1 import AppTest
 

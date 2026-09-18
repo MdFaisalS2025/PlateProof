@@ -62,10 +62,15 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     database_path: Path = Path("data/processed/plateproof.duckdb")
 
+    #: Task 10: enables PlateProof's link-only Google Maps feature
+    #: (plateproof.serving.display.google_maps_search_link) -- a plain,
+    #: no-API-key, no-billing outbound search URL, never a call to a paid
+    #: Google API. There is deliberately no API-key/OAuth-client setting
+    #: here: this feature needs neither, and the previous placeholders for
+    #: a possible future Places/Business Profile integration were removed
+    #: after a repository-wide reference check found they were unused
+    #: anywhere in the codebase.
     google_integration_enabled: bool = False
-    google_maps_api_key: str | None = None
-    google_oauth_client_id: str | None = None
-    google_oauth_client_secret: str | None = None
 
     local_llm_enabled: bool = False
     local_llm_base_url: str = "http://localhost:11434"

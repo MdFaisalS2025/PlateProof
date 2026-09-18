@@ -9,6 +9,9 @@ from typing import Any
 
 import streamlit as st
 
+from plateproof.core.config import get_settings
+from plateproof.serving.display import GOOGLE_SEARCH_LINK_ATTRIBUTION, google_maps_search_link
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from theme import configure_page, render_independence_footer, repository  # noqa: E402
 
@@ -29,6 +32,7 @@ else:
     jurisdiction = None
 
 repo = repository()
+settings = get_settings()
 
 try:
     result = repo.search_restaurants(query=query, jurisdiction=jurisdiction, limit=25, offset=0)
@@ -54,6 +58,16 @@ if result is not None:
                     + ", ".join(row_any["latest_documented_michelin_distinctions"])
                     + f" ({row_any.get('latest_documented_guide_year')})"
                 )
+            if settings.google_integration_enabled:
+                google_link = google_maps_search_link(
+                    name=str(row_any.get("name") or ""),
+                    address=row_any.get("address"),
+                    city=row_any.get("city"),
+                    region=row_any.get("region"),
+                )
+                if google_link is not None:
+                    st.markdown(f"[View on Google Maps]({google_link})")
+                    st.caption(GOOGLE_SEARCH_LINK_ATTRIBUTION)
 
     for warning in result.warnings:
         st.warning(warning)

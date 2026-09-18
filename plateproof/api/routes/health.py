@@ -40,6 +40,11 @@ def get_health(
     snapshot = repository.health_snapshot()
     nyc_model_status = "ok" if model_metadata.get("nyc") is not None else "unavailable"
     florida_model_status = "ok" if model_metadata.get("florida") is not None else "unavailable"
+    # Task 10: "google" reports whether the link-only Google Maps feature
+    # (plateproof.serving.display.google_maps_search_link) is enabled --
+    # never Google API reachability. There is no Google API in this
+    # feature to be reachable or not: PlateProof's server makes no network
+    # call to Google at any point.
     google_status = "ok" if settings.google_integration_enabled else "disabled"
     # No live network probe of the local model server happens here -- that
     # would make this shared health endpoint slow and flaky.
