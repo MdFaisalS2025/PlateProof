@@ -195,6 +195,23 @@ class WorkerInvalidResponse:
 
 
 @dataclass(frozen=True, kw_only=True)
+class WorkerBusy:
+    """No worker-pool slot became free within the bounded admission window
+    (independent-review Finding 1: ``WorkerPool.submit()`` previously
+    blocked at ``_free_slots.get()`` with no time bound, so a saturated
+    pool could hold a caller's thread and document bytes indefinitely --
+    the per-page/per-document deadlines only start once a job is actually
+    admitted, so they never covered this wait at all).
+
+    Distinct from :class:`WorkerTimeout`, which covers a job that WAS
+    admitted and started running. A request that receives ``WorkerBusy``
+    was never assigned a slot and never sent to a worker -- it cannot
+    later begin processing once this outcome is returned, by construction:
+    the admission queue's own bounded ``get()`` either hands back a slot
+    or raises, atomically, with nothing left "in flight" to resume."""
+
+
+@dataclass(frozen=True, kw_only=True)
 class WorkerPreviewHeader:
     """Announces the size of the binary preview frame that immediately
     follows this message on the same connection (Finding 7). The parent

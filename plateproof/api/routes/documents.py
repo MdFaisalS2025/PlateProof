@@ -194,12 +194,25 @@ async def owners_documents_extract(
 
     # Exact multipart shape: every field name present must be one of the
     # two allowed names, and each of those must appear exactly once. This
-    # is checked -- and any file already parsed by Starlette is closed --
+    # is checked -- and every file Starlette actually parsed is closed --
     # before any other validation, so a malformed shape never leaves a
-    # spooled UploadFile handle open (Finding 2).
+    # spooled UploadFile handle open.
+    #
+    # Independent-review correction of c60cc80's own Finding-2 fix: closing
+    # only ``form.get("file")`` misses every OTHER UploadFile a malformed
+    # request can make Starlette parse -- a second file under an unexpected
+    # field name, a second file under "file" itself (form.get() returns
+    # only the first value for a repeated key), or the request's only file
+    # arriving entirely under a field name outside the allowed set. Every
+    # UploadFile instance ``form.multi_items()`` actually returned is
+    # collected up front and closed in the ``finally`` block below,
+    # regardless of which field name it was parsed under.
     field_counts: dict[str, int] = {}
-    for key, _value in form.multi_items():
+    files_to_close: list[StarletteUploadFile] = []
+    for key, value in form.multi_items():
         field_counts[key] = field_counts.get(key, 0) + 1
+        if isinstance(value, StarletteUploadFile):
+            files_to_close.append(value)
     file = form.get("file")
 
     try:
@@ -252,7 +265,7 @@ async def owners_documents_extract(
         # Closed on every exit path -- success, any validation rejection
         # (including one raised before the restaurant/file shape was even
         # confirmed), RestaurantNotFoundError, cancellation/disconnect, or
-        # any other exception above -- whenever Starlette actually handed
-        # back a real UploadFile for the "file" field.
-        if isinstance(file, StarletteUploadFile):
-            await file.close()
+        # any other exception above -- for every UploadFile Starlette
+        # actually parsed, under any field name, not just "file".
+        for parsed_file in files_to_close:
+            await parsed_file.close()

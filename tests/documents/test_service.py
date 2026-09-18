@@ -73,6 +73,47 @@ def _timeout_worker(conn: Any) -> None:
     time.sleep(600)
 
 
+def _occupied_slot_worker(conn: Any) -> None:
+    """Holds its slot busy for a bit before completing, then keeps serving
+    further jobs on the same process -- module-level (not a local closure)
+    because the ``spawn`` context must be able to pickle-by-reference a
+    worker-process target function."""
+    import time
+
+    from plateproof.documents.worker.protocol import (
+        ProtocolViolationError,
+        recv_bytes_frame,
+        recv_frame,
+        send_frame,
+    )
+
+    while True:
+        try:
+            recv_frame(conn)
+            recv_bytes_frame(conn, max_length=64_000_000)
+        except ProtocolViolationError:
+            return
+        time.sleep(1.2)
+        send_frame(
+            conn,
+            {
+                "protocol_version": 1,
+                "message_type": "job_response",
+                "ocr_available": False,
+                "pages": [
+                    {
+                        "page_number": 1,
+                        "width_px": 10,
+                        "height_px": 10,
+                        "used_ocr": False,
+                        "ocr_attempted": False,
+                        "text_blocks": [],
+                    }
+                ],
+            },
+        )
+
+
 def test_extract_document_returns_completed_draft_on_success() -> None:
     from plateproof.documents.service import extract_document
     from plateproof.documents.worker.pool import WorkerPool, WorkerPoolConfig
@@ -137,6 +178,57 @@ def test_extract_document_returns_failed_draft_on_worker_timeout() -> None:
         assert draft is not None
         assert draft.processing_status == "failed"
         assert draft.confirmable is False
+    finally:
+        pool.shutdown()
+
+
+def test_extract_document_returns_failed_draft_on_worker_busy() -> None:
+    """A pool with no free slot within its bounded admission window
+    (independent-review Finding 1) must surface as the same typed,
+    sanitized failed-draft shape as every other worker outcome -- never a
+    hang, never a raised exception."""
+    import threading
+    import time
+
+    from plateproof.documents.service import extract_document
+    from plateproof.documents.worker.pool import WorkerPool, WorkerPoolConfig
+
+    pool = WorkerPool(
+        config=WorkerPoolConfig(
+            pool_size=1,
+            admission_timeout_seconds=0.3,
+            page_timeout_seconds=30.0,
+            total_timeout_seconds=30.0,
+        ),
+        worker_main=_occupied_slot_worker,
+    )
+    try:
+        first_thread = threading.Thread(
+            target=extract_document,
+            kwargs={
+                "data": _minimal_pdf("Score: 14"),
+                "expected_jurisdiction": "nyc",
+                "restaurant_id": "nyc:1",
+                "expected_restaurant_name": "Joe's Pizza",
+                "pool": pool,
+            },
+        )
+        first_thread.start()
+        time.sleep(0.3)  # let the first call actually occupy the only slot
+
+        draft = extract_document(
+            _minimal_pdf("Score: 14"),
+            expected_jurisdiction="nyc",
+            restaurant_id="nyc:1",
+            expected_restaurant_name="Joe's Pizza",
+            pool=pool,
+        )
+        first_thread.join(timeout=10)
+
+        assert draft is not None
+        assert draft.processing_status == "failed"
+        assert draft.confirmable is False
+        assert any(w.code == "worker_busy" for w in draft.warnings)
     finally:
         pool.shutdown()
 

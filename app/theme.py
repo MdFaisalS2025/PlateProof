@@ -238,6 +238,7 @@ def _documents_cache_key(settings: Settings) -> str:
             settings.documents_worker_page_timeout_seconds,
             settings.documents_worker_total_timeout_seconds,
             settings.documents_worker_kill_grace_seconds,
+            settings.documents_worker_admission_timeout_seconds,
         )
     )
 
@@ -252,6 +253,7 @@ def document_worker_pool() -> WorkerPool:
                 page_timeout_seconds=settings.documents_worker_page_timeout_seconds,
                 total_timeout_seconds=settings.documents_worker_total_timeout_seconds,
                 kill_grace_seconds=settings.documents_worker_kill_grace_seconds,
+                admission_timeout_seconds=settings.documents_worker_admission_timeout_seconds,
             )
         )
     return _document_worker_pool_cache[key]

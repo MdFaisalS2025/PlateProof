@@ -82,3 +82,13 @@ DEFAULT_TOTAL_TIMEOUT_SECONDS = 60.0
 MIN_KILL_GRACE_SECONDS = 0.1
 ABSOLUTE_MAX_KILL_GRACE_SECONDS = 10.0
 DEFAULT_KILL_GRACE_SECONDS = 2.0
+
+#: Bounded wait for a free worker-pool slot (independent-review Finding 1:
+#: WorkerPool.submit() previously blocked at _free_slots.get() with no time
+#: bound at all, so the per-page/per-document deadlines -- which only start
+#: once a job is actually admitted -- never covered a saturated pool).
+#: Deliberately a separate budget from the job deadlines above: admission
+#: is "wait for a slot to exist," not "wait for a job to finish."
+MIN_ADMISSION_TIMEOUT_SECONDS = 0.1
+ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS = 120.0
+DEFAULT_ADMISSION_TIMEOUT_SECONDS = 30.0

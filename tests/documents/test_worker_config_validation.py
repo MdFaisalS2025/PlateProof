@@ -17,6 +17,7 @@ def _build(**overrides: object) -> object:
         "page_timeout_seconds": 20.0,
         "total_timeout_seconds": 60.0,
         "kill_grace_seconds": 2.0,
+        "admission_timeout_seconds": 20.0,
     }
     defaults.update(overrides)
     return WorkerPoolConfig(**defaults)  # type: ignore[arg-type]
@@ -99,6 +100,34 @@ def test_kill_grace_above_ceiling_rejected() -> None:
 def test_boolean_timeout_rejected() -> None:
     with pytest.raises(ValueError):
         _build(page_timeout_seconds=True)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, math.inf, math.nan])
+def test_invalid_admission_timeout_rejected(value: float) -> None:
+    """WorkerPool.submit() waits at most admission_timeout_seconds for a
+    free slot (independent-review Finding 1) -- an invalid value here must
+    never construct a config that later lets submit() block forever or
+    accept a nonsensical bound."""
+    with pytest.raises(ValueError):
+        _build(admission_timeout_seconds=value)
+
+
+def test_admission_timeout_above_ceiling_rejected() -> None:
+    from plateproof.documents.limits import ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS
+
+    with pytest.raises(ValueError):
+        _build(admission_timeout_seconds=ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS + 1)
+
+
+def test_admission_timeout_at_ceiling_accepted() -> None:
+    from plateproof.documents.limits import ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS
+
+    _build(admission_timeout_seconds=ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS)  # must not raise
+
+
+def test_boolean_admission_timeout_rejected() -> None:
+    with pytest.raises(ValueError):
+        _build(admission_timeout_seconds=True)
 
 
 def test_invalid_config_never_creates_a_partially_initialized_pool() -> None:

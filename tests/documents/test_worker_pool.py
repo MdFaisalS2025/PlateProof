@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from plateproof.documents.worker.protocol import (
+    WorkerBusy,
     WorkerCrashed,
     WorkerInvalidResponse,
     WorkerJobRequest,
@@ -127,6 +128,44 @@ def _pid_reporting_worker(conn: Any) -> None:
                 "pages": [
                     {
                         "page_number": os.getpid() % 100000 + 1,
+                        "width_px": 10,
+                        "height_px": 10,
+                        "used_ocr": False,
+                        "ocr_attempted": False,
+                        "text_blocks": [],
+                    }
+                ],
+            },
+        )
+
+
+def _occupied_slot_worker(conn: Any) -> None:
+    """Holds its slot busy for a bit before completing successfully, then
+    keeps serving further jobs on the same process -- used to saturate a
+    small pool so a concurrent submit exercises the bounded admission wait
+    (independent-review Finding 1). Loops like ``_echo_success_worker``
+    (matching the real entrypoint's recyclable-worker design): a worker
+    that returns ``WorkerJobResponse`` is never retired by the pool, so a
+    single-shot double here would leave the pool believing a since-exited
+    process is still usable for the next job."""
+    from plateproof.documents.worker.protocol import ProtocolViolationError
+
+    while True:
+        try:
+            recv_frame(conn)
+            recv_bytes_frame(conn, max_length=64_000_000)
+        except ProtocolViolationError:
+            return
+        time.sleep(1.2)
+        send_frame(
+            conn,
+            {
+                "protocol_version": 1,
+                "message_type": "job_response",
+                "ocr_available": False,
+                "pages": [
+                    {
+                        "page_number": 1,
                         "width_px": 10,
                         "height_px": 10,
                         "used_ocr": False,
@@ -320,3 +359,114 @@ def test_shutdown_terminates_all_live_workers() -> None:
     pool.shutdown()
     live = [h for h in pool._slots.values() if h is not None and h.process.is_alive()]
     assert live == []
+
+
+# --------------------------------------------------------------------------- #
+# Bounded admission (independent-review Finding 1): submit() must not block   #
+# indefinitely at _free_slots.get() -- a saturated pool must fail closed      #
+# with a typed, safe WorkerBusy outcome within a finite, configured window,   #
+# and a request that gave up during admission must never go on to use a      #
+# worker slot or process a job.                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_admission_times_out_with_worker_busy_when_pool_saturated() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from plateproof.documents.worker.pool import WorkerPool
+
+    pool = WorkerPool(
+        config=_pool_config(
+            pool_size=1,
+            admission_timeout_seconds=0.3,
+            page_timeout_seconds=30.0,
+            total_timeout_seconds=30.0,
+        ),
+        worker_main=_occupied_slot_worker,
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(pool.submit, _REQUEST, b"x")
+            time.sleep(0.3)  # let the first job actually occupy the only slot
+
+            started = time.monotonic()
+            second_outcome = pool.submit(_REQUEST, b"y")
+            elapsed = time.monotonic() - started
+
+            assert isinstance(second_outcome, WorkerBusy)
+            # Bounded by admission_timeout_seconds=0.3, not stuck for the
+            # first job's full 1.2s run -- proves the wait is time-bounded,
+            # not "wait until the job happens to finish."
+            assert elapsed < 1.0
+
+            first_outcome = first.result(timeout=10)
+            assert isinstance(first_outcome, WorkerJobResponse)
+    finally:
+        pool.shutdown()
+
+
+def test_admission_recovers_once_a_slot_frees() -> None:
+    from plateproof.documents.worker.pool import WorkerPool
+
+    pool = WorkerPool(
+        config=_pool_config(
+            pool_size=1,
+            admission_timeout_seconds=5.0,
+            page_timeout_seconds=30.0,
+            total_timeout_seconds=30.0,
+        ),
+        worker_main=_occupied_slot_worker,
+    )
+    try:
+        first_outcome = pool.submit(_REQUEST, b"x")
+        assert isinstance(first_outcome, WorkerJobResponse)
+        # The slot was returned to the pool after the first job completed --
+        # a second submit succeeds normally, not as WorkerBusy.
+        second_outcome = pool.submit(_REQUEST, b"y")
+        assert isinstance(second_outcome, WorkerJobResponse)
+    finally:
+        pool.shutdown()
+
+
+def test_timed_out_admission_never_spawns_or_uses_a_worker() -> None:
+    """A request that gave up waiting for a slot must never later begin
+    processing: it must never cause a worker to be spawned or a job to be
+    sent to one -- proven by spying on _spawn_worker and asserting it was
+    called exactly once (for the first, actually-admitted job), never twice
+    despite two submit() calls against a pool of size 1."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from plateproof.documents.worker import pool as pool_module
+    from plateproof.documents.worker.pool import WorkerPool
+
+    spawn_calls: list[int] = []
+    original_spawn = WorkerPool._spawn_worker
+
+    def _tracking_spawn(self: Any) -> Any:
+        spawn_calls.append(1)
+        return original_spawn(self)
+
+    pool = WorkerPool(
+        config=_pool_config(
+            pool_size=1,
+            admission_timeout_seconds=0.3,
+            page_timeout_seconds=30.0,
+            total_timeout_seconds=30.0,
+        ),
+        worker_main=_occupied_slot_worker,
+    )
+    try:
+        with pytest_monkeypatch_context() as mp:
+            mp.setattr(pool_module.WorkerPool, "_spawn_worker", _tracking_spawn)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(pool.submit, _REQUEST, b"x")
+                time.sleep(0.3)
+
+                second_outcome = pool.submit(_REQUEST, b"y")
+                assert isinstance(second_outcome, WorkerBusy)
+
+                first_outcome = first.result(timeout=10)
+                assert isinstance(first_outcome, WorkerJobResponse)
+        assert spawn_calls == [1]
+    finally:
+        pool.shutdown()

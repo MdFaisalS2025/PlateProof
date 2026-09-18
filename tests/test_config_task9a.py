@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from plateproof.core.config import Settings
 from plateproof.documents.limits import (
+    ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_KILL_GRACE_SECONDS,
     ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_PAGES,
@@ -21,6 +22,7 @@ from plateproof.documents.limits import (
     ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES,
     ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_UPLOAD_BYTES,
+    DEFAULT_ADMISSION_TIMEOUT_SECONDS,
     DEFAULT_MAX_PAGES,
     DEFAULT_MAX_PIXELS_PER_PAGE,
     DEFAULT_MAX_TEXT_BYTES_PER_DOCUMENT,
@@ -42,6 +44,7 @@ def test_task_9a_settings_have_safe_defaults() -> None:
     assert settings.documents_worker_page_timeout_seconds == DEFAULT_PAGE_TIMEOUT_SECONDS
     assert settings.documents_worker_total_timeout_seconds == DEFAULT_TOTAL_TIMEOUT_SECONDS
     assert settings.documents_max_total_preview_bytes == DEFAULT_MAX_TOTAL_PREVIEW_BYTES
+    assert settings.documents_worker_admission_timeout_seconds == DEFAULT_ADMISSION_TIMEOUT_SECONDS
 
 
 def test_task_9a_settings_are_overridable_within_ceilings() -> None:
@@ -68,6 +71,7 @@ def test_task_9a_settings_are_overridable_within_ceilings() -> None:
         ("documents_worker_total_timeout_seconds", ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS),
         ("documents_worker_kill_grace_seconds", ABSOLUTE_MAX_KILL_GRACE_SECONDS),
         ("documents_max_total_preview_bytes", ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES),
+        ("documents_worker_admission_timeout_seconds", ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS),
     ],
 )
 def test_setting_above_its_absolute_ceiling_is_rejected(field: str, ceiling: float) -> None:
@@ -87,6 +91,7 @@ def test_setting_above_its_absolute_ceiling_is_rejected(field: str, ceiling: flo
         "documents_worker_total_timeout_seconds",
         "documents_worker_kill_grace_seconds",
         "documents_max_total_preview_bytes",
+        "documents_worker_admission_timeout_seconds",
     ],
 )
 def test_setting_zero_or_negative_is_rejected(field: str) -> None:

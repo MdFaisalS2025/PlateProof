@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from plateproof.copilot.question_validation import ABSOLUTE_MAX_QUESTION_LENGTH
 from plateproof.documents.limits import (
+    ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_KILL_GRACE_SECONDS,
     ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_PAGES,
@@ -23,6 +24,7 @@ from plateproof.documents.limits import (
     ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES,
     ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_UPLOAD_BYTES,
+    DEFAULT_ADMISSION_TIMEOUT_SECONDS,
     DEFAULT_KILL_GRACE_SECONDS,
     DEFAULT_MAX_PAGES,
     DEFAULT_MAX_PIXELS_PER_PAGE,
@@ -96,6 +98,7 @@ class Settings(BaseSettings):
     documents_worker_total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS
     documents_worker_kill_grace_seconds: float = DEFAULT_KILL_GRACE_SECONDS
     documents_max_total_preview_bytes: int = DEFAULT_MAX_TOTAL_PREVIEW_BYTES
+    documents_worker_admission_timeout_seconds: float = DEFAULT_ADMISSION_TIMEOUT_SECONDS
 
     @field_validator("documents_max_upload_bytes")
     @classmethod
@@ -193,6 +196,18 @@ class Settings(BaseSettings):
             raise ValueError(
                 "documents_max_total_preview_bytes must not exceed "
                 f"{ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES}"
+            )
+        return value
+
+    @field_validator("documents_worker_admission_timeout_seconds")
+    @classmethod
+    def _validate_documents_worker_admission_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("documents_worker_admission_timeout_seconds must be positive")
+        if value > ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS:
+            raise ValueError(
+                "documents_worker_admission_timeout_seconds must not exceed "
+                f"{ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS}"
             )
         return value
 

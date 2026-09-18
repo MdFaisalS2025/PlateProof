@@ -375,6 +375,34 @@ def test_upload_file_is_closed_after_oversized_restaurant_id(
     assert close_calls == [1]
 
 
+def test_upload_file_is_closed_when_the_only_file_is_under_an_unexpected_field_name(
+    documents_app: Any, write_restaurants: Any, restaurant_row: Any, monkeypatch: Any
+) -> None:
+    """No "file" field at all -- the single uploaded file arrives entirely
+    under an unexpected field name ("document"). form.get("file") is None
+    in the old code, so the parsed UploadFile was never closed even though
+    Starlette successfully spooled it."""
+    from starlette.datastructures import UploadFile
+
+    _write_restaurant(write_restaurants, restaurant_row)
+    client = documents_app()
+    close_calls: list[int] = []
+    original_close = UploadFile.close
+
+    async def _tracked_close(self: Any) -> None:
+        close_calls.append(1)
+        await original_close(self)
+
+    monkeypatch.setattr(UploadFile, "close", _tracked_close)
+    response = client.post(
+        "/owners/documents/extract",
+        data={"restaurant_id": "nyc:1"},
+        files=[("document", ("a.pdf", io.BytesIO(_minimal_pdf("a")), "application/pdf"))],
+    )
+    assert response.status_code == 422
+    assert close_calls == [1]
+
+
 def test_oversized_restaurant_id_rejected_with_413(
     documents_app: Any, write_restaurants: Any, restaurant_row: Any
 ) -> None:

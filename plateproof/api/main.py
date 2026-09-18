@@ -45,6 +45,7 @@ def _build_document_worker_pool(settings: Settings) -> WorkerPool:
             page_timeout_seconds=settings.documents_worker_page_timeout_seconds,
             total_timeout_seconds=settings.documents_worker_total_timeout_seconds,
             kill_grace_seconds=settings.documents_worker_kill_grace_seconds,
+            admission_timeout_seconds=settings.documents_worker_admission_timeout_seconds,
         )
     )
 

@@ -30,6 +30,7 @@ from plateproof.documents.models import Warning as DocumentWarning
 from plateproof.documents.validation import validate_upload_bytes
 from plateproof.documents.worker.pool import DEFAULT_PAGE_TIMEOUT_SECONDS, WorkerPool
 from plateproof.documents.worker.protocol import (
+    WorkerBusy,
     WorkerCrashed,
     WorkerInvalidResponse,
     WorkerJobError,
@@ -183,6 +184,11 @@ def extract_document(
         warning = DocumentWarning(
             code="worker_crashed",
             message="This document could not be processed due to an internal error.",
+        )
+    elif isinstance(outcome, WorkerBusy):
+        warning = DocumentWarning(
+            code="worker_busy",
+            message="The document processing service is busy right now. Please try again shortly.",
         )
     else:
         assert isinstance(outcome, WorkerInvalidResponse)

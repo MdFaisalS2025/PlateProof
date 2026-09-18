@@ -34,6 +34,7 @@ from multiprocessing.context import SpawnContext
 from typing import Any
 
 from plateproof.documents.limits import (
+    ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_KILL_GRACE_SECONDS,
     ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_POOL_SIZE,
@@ -44,10 +45,12 @@ from plateproof.documents.limits import (
     ABSOLUTE_MAX_TOTAL_PREVIEW_BYTES,
     ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS,
     ABSOLUTE_MAX_UPLOAD_BYTES,
+    DEFAULT_ADMISSION_TIMEOUT_SECONDS,
     DEFAULT_KILL_GRACE_SECONDS,
     DEFAULT_PAGE_TIMEOUT_SECONDS,
     DEFAULT_POOL_SIZE,
     DEFAULT_TOTAL_TIMEOUT_SECONDS,
+    MIN_ADMISSION_TIMEOUT_SECONDS,
     MIN_KILL_GRACE_SECONDS,
     MIN_POOL_SIZE,
 )
@@ -56,6 +59,7 @@ from plateproof.documents.worker.protocol import (
     PROTOCOL_VERSION,
     ProtocolViolationError,
     ValidatedPreview,
+    WorkerBusy,
     WorkerCrashed,
     WorkerInvalidResponse,
     WorkerJobError,
@@ -225,7 +229,12 @@ def _validate_preview_png(
 #: distinct from ``WorkerInvalidResponse`` (a *malformed* or schema-invalid
 #: message the worker never should have sent at all).
 WorkerOutcome = (
-    WorkerJobResponse | WorkerJobError | WorkerTimeout | WorkerCrashed | WorkerInvalidResponse
+    WorkerJobResponse
+    | WorkerJobError
+    | WorkerTimeout
+    | WorkerCrashed
+    | WorkerInvalidResponse
+    | WorkerBusy
 )
 
 # Re-exported for backward-compatible import sites; the authoritative values
@@ -234,6 +243,7 @@ WorkerOutcome = (
 MAX_POOL_SIZE = ABSOLUTE_MAX_POOL_SIZE
 MAX_PAGE_TIMEOUT_SECONDS = ABSOLUTE_MAX_PAGE_TIMEOUT_SECONDS
 MAX_TOTAL_TIMEOUT_SECONDS = ABSOLUTE_MAX_TOTAL_TIMEOUT_SECONDS
+MAX_ADMISSION_TIMEOUT_SECONDS = ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS
 KILL_GRACE_SECONDS = DEFAULT_KILL_GRACE_SECONDS
 
 
@@ -265,6 +275,11 @@ class WorkerPoolConfig:
     page_timeout_seconds: float = DEFAULT_PAGE_TIMEOUT_SECONDS
     total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS
     kill_grace_seconds: float = DEFAULT_KILL_GRACE_SECONDS
+    #: Bounded wait for a free slot in ``submit()`` (Finding 1) -- separate
+    #: from the job deadlines above, since admission ("wait for a slot to
+    #: exist") and job execution ("wait for a job to finish") are different
+    #: things that must not share one budget.
+    admission_timeout_seconds: float = DEFAULT_ADMISSION_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         pool_size = _exact_int(self.pool_size)
@@ -296,6 +311,17 @@ class WorkerPoolConfig:
             raise ValueError(
                 f"kill_grace_seconds must be a finite number in "
                 f"[{MIN_KILL_GRACE_SECONDS}, {ABSOLUTE_MAX_KILL_GRACE_SECONDS}]"
+            )
+
+        admission_timeout = _exact_finite_number(self.admission_timeout_seconds)
+        if admission_timeout is None or not (
+            MIN_ADMISSION_TIMEOUT_SECONDS
+            <= admission_timeout
+            <= ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                "admission_timeout_seconds must be a finite number in "
+                f"[{MIN_ADMISSION_TIMEOUT_SECONDS}, {ABSOLUTE_MAX_ADMISSION_TIMEOUT_SECONDS}]"
             )
 
 
@@ -339,7 +365,24 @@ class WorkerPool:
             self._free_slots.put(index)
 
     def submit(self, job_request: WorkerJobRequest, document_bytes: bytes) -> WorkerOutcome:
-        index = self._free_slots.get()
+        """Blocks until a slot is free, bounded by
+        ``config.admission_timeout_seconds`` (Finding 1) -- a saturated
+        pool fails closed with :class:`WorkerBusy` rather than blocking
+        indefinitely, which under concurrent uploads would otherwise let
+        requests pile up holding threads and document bytes with no time
+        bound at all (the per-page/per-document deadlines only start once
+        a job is actually admitted, so they never covered this wait).
+
+        ``queue.Queue.get(timeout=...)`` either returns a slot or raises
+        ``queue.Empty``, atomically -- there is no third outcome where a
+        timed-out caller is later handed a slot anyway, so a request that
+        received :class:`WorkerBusy` never goes on to spawn a worker or
+        send it a job.
+        """
+        try:
+            index = self._free_slots.get(timeout=self._config.admission_timeout_seconds)
+        except queue.Empty:
+            return WorkerBusy()
         try:
             handle = self._ensure_worker(index)
             outcome = self._run_job(handle, job_request, document_bytes)
@@ -572,14 +615,17 @@ class WorkerPool:
 
 
 __all__ = [
+    "DEFAULT_ADMISSION_TIMEOUT_SECONDS",
     "DEFAULT_PAGE_TIMEOUT_SECONDS",
     "DEFAULT_POOL_SIZE",
     "DEFAULT_TOTAL_TIMEOUT_SECONDS",
     "KILL_GRACE_SECONDS",
+    "MAX_ADMISSION_TIMEOUT_SECONDS",
     "MAX_PAGE_TIMEOUT_SECONDS",
     "MAX_POOL_SIZE",
     "MAX_TOTAL_TIMEOUT_SECONDS",
     "MAX_WORKER_FRAME_BYTES",
+    "WorkerBusy",
     "WorkerOutcome",
     "WorkerPool",
     "WorkerPoolConfig",
