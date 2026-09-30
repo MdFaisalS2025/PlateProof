@@ -4,6 +4,99 @@ PlateProof is an independent restaurant-intelligence project combining official 
 
 The first release covers New York City and Florida. It preserves each jurisdiction's native inspection system instead of inventing a universal health grade.
 
+**This is a solo, from-scratch engineering project built task-by-task under strict
+test-driven development** (every feature below has a failing-test-first commit
+history), not a forked template or a tutorial walkthrough.
+
+## The problem
+
+Diners and restaurant owners have no single, honest place to see a restaurant's
+*official* health-inspection history alongside a calibrated, uncertainty-aware
+forecast of what its next inspection might look like. Existing restaurant apps
+either ignore inspection data entirely or flatten NYC's point-based grading and
+Florida's violation-severity system into a single misleading "score." PlateProof's
+core bet: keep each jurisdiction's own inspection system intact, never invent a
+universal grade, and never let a prediction be mistaken for an official result.
+
+## What I built
+
+- Two independently trained, leakage-safe, calibrated risk models (NYC and Florida),
+  never a shared model across jurisdictions, with a hard-enforced feature allowlist
+  and token-based guard that provably keeps the target and third-party content
+  (Michelin, Google) out of training data.
+- A read-only FastAPI service and a Streamlit MVP over the same DuckDB/Parquet
+  serving layer -- restaurant search, inspection/violation history, jurisdiction-native
+  risk bands with uncertainty intervals, and source links back to the original
+  government datasets.
+- **PlateProof Copilot** -- a deterministic, citation-grounded Q&A layer over a
+  temporal knowledge graph and a reviewed official-guidance corpus. Every factual
+  sentence is built by a fixed claim builder from retrieved evidence; nothing is
+  freely generated. An optional local Ollama adapter only ever classifies *which*
+  of 9 closed intents a question maps to -- it never writes the answer itself.
+- A process-isolated document-extraction pipeline letting an owner upload their own
+  inspection PDF/image and review a machine-assisted, evidence-grounded extraction
+  of it -- OCR/PDF parsing runs only inside short-lived, killable worker processes
+  behind a hand-rolled non-pickle IPC protocol, specifically to keep a
+  malicious/malformed upload from ever reaching the trusted parent process.
+- A researched, honestly-scoped optional Google Maps integration: after verifying
+  that Google's Places API requires a billing account (a credit card) before any
+  call at all, it ships only a zero-key, zero-network outbound search link instead.
+- A full release-readiness audit (`reports/model_card.md`, `docs/deployment.md`):
+  live-verified download-to-serving pipeline on real government data, a researched
+  conclusion that no genuinely free/no-card host can run this app's full worker-process
+  architecture publicly, and an honest "local-only release" status rather than a
+  claimed deployment that doesn't hold up.
+
+## Architecture
+
+```
+NYC / Florida open data  ---->  ingestion + entity resolution  ---->  DuckDB/Parquet
+   (download scripts)          (dedup, normalize, Michelin match)     processed tables
+                                                                            |
+                                                                            v
+                                              +-----------------------------------------+
+                                              |        plateproof.serving (shared)       |
+                                              |  repository + service layer, no business |
+                                              |  logic duplicated between entry points   |
+                                              +-------------------+---------------------+
+                                                                   |
+                                   +-------------------------------+-------------------------------+
+                                   |                                                               |
+                          FastAPI service                                                Streamlit MVP
+                    (read-only HTTP routes)                                        (thin UI over the same layer)
+                                   |                                                               |
+                    +--------------+--------------+                                +---------------+
+                    |                             |                                |
+        Copilot (deterministic,         Document extraction:                 Model card / risk-band
+        graph + guidance corpus         isolated worker-process               pages, source links,
+        retrieval, citation-only)       pool, non-pickle IPC,                 optional Google-link
+                                        OCR/PDFium, never the                 attribution
+                                        request-handling process
+```
+
+Offline-only, administrator-run stages (never touched by a live request): data
+download, `build_processed_tables`, model training/calibration
+(`plateproof/models/`), and `score_predictions`. The running web application only
+ever reads precomputed Parquet tables and sanitized model metadata -- it never
+deserializes or executes a model artifact itself.
+
+## Technology stack
+
+Python 3.12 · FastAPI + Uvicorn · Streamlit · DuckDB over local Parquet · Polars ·
+Pydantic · scikit-learn (logistic regression + histogram gradient boosting) ·
+NetworkX (temporal knowledge graph) · pypdfium2 + Pillow + RapidOCR/ONNX Runtime
+(document extraction, worker-process only) · pytest/Ruff/mypy/coverage for
+verification · optional local Ollama for intent classification only. Every
+dependency is free and runs locally -- no paid API is required for any feature.
+
+## Demo
+
+There is no hosted public demo (see "Release verification and deployment" below
+for exactly why, and what it would take to change that). To try it locally: follow
+"Local development" and "Running the API and the Streamlit MVP" below, then open
+`http://localhost:8501` for the Streamlit UI or `http://localhost:8000/docs` for
+the interactive API docs.
+
 ## Start here
 
 1. Read `CLAUDE.md`.
